@@ -18,13 +18,13 @@ class FDARecallCrawler(BaseCrawler):
 
     def _build_search_query(self, product: dict) -> str:
         """根據產品設定建立搜尋查詢"""
-        terms = []
+        parts = []
 
         # 使用 FDA 產品代碼搜尋
         codes = [c.strip() for c in product.get("fda_product_codes", "").split(",") if c.strip()]
         if codes:
             code_queries = [f'product_code:"{code}"' for code in codes]
-            terms.append(f'({" OR ".join(code_queries)})')
+            parts.append(f'({" OR ".join(code_queries)})')
 
         # 使用關鍵字搜尋
         keywords = [k.strip() for k in product.get("keywords", "").split(",") if k.strip()]
@@ -34,11 +34,11 @@ class FDARecallCrawler(BaseCrawler):
                 kw_queries.append(
                     f'(product_description:"{kw}" OR reason_for_recall:"{kw}" OR openfda.device_name:"{kw}")'
                 )
-            terms.append(f'({" OR ".join(kw_queries)})')
+            parts.append(f'({" OR ".join(kw_queries)})')
 
-        if not terms:
+        if not parts:
             return ""
-        return " OR ".join(terms)
+        return " OR ".join(parts)
 
     def _fetch_recalls(self, search_query: str, limit: int = 100, skip: int = 0) -> dict:
         """從 FDA API 取得召回資料"""

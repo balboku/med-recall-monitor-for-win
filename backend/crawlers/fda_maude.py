@@ -18,12 +18,12 @@ class FDAMaudeCrawler(BaseCrawler):
 
     def _build_search_query(self, product: dict) -> str:
         """根據產品設定建立搜尋查詢"""
-        terms = []
+        parts = []
 
         codes = [c.strip() for c in product.get("fda_product_codes", "").split(",") if c.strip()]
         if codes:
             code_queries = [f'device.product_code:"{code}"' for code in codes]
-            terms.append(f'({" OR ".join(code_queries)})')
+            parts.append(f'({" OR ".join(code_queries)})')
 
         keywords = [k.strip() for k in product.get("keywords", "").split(",") if k.strip()]
         if keywords:
@@ -31,13 +31,11 @@ class FDAMaudeCrawler(BaseCrawler):
             for kw in keywords:
                 kw_queries.append(
                     f'(device.brand_name:"{kw}" OR device.generic_name:"{kw}" OR '
-                    f'device.openfda.device_name:"{kw}")'
+                    f'device.openfda.device_name:"{kw}" OR mdr_text.text:"{kw}")'
                 )
-            terms.append(f'({" OR ".join(kw_queries)})')
+            parts.append(f'({" OR ".join(kw_queries)})')
 
-        if not terms:
-            return ""
-        return " OR ".join(terms)
+        return " AND ".join(parts) if parts else ""
 
     def _fetch_events(self, search_query: str, limit: int = 100, skip: int = 0) -> dict:
         """從 FDA API 取得不良事件資料"""
@@ -55,9 +53,9 @@ class FDAMaudeCrawler(BaseCrawler):
     def _parse_event(self, item: dict, product_id: int) -> dict:
         """解析單筆不良事件"""
         devices: list = item.get("device", [{}])
-        device = devices[0] if isinstance(devices, list) and devices else {}
+        device = devices[0] if isinstance(devices, list) and devices else {} # type: ignore
         patients: list = item.get("patient", [{}])
-        patient = patients[0] if isinstance(patients, list) and patients else {}
+        patient = patients[0] if isinstance(patients, list) and patients else {} # type: ignore
         mdr_text: list = item.get("mdr_text", [{}])
 
         # 組合事件描述
@@ -66,7 +64,7 @@ class FDAMaudeCrawler(BaseCrawler):
             t = text_entry.get("text", "")
             if t:
                 descriptions.append(t)
-        event_description = " | ".join(descriptions[:3])  # 最多取 3 段
+        event_description = " | ".join(descriptions[:3]) # type: ignore
 
         # 判斷事件類型
         event_types = []
@@ -148,7 +146,7 @@ class FDAMaudeCrawler(BaseCrawler):
                     event_data = self._parse_event(item, product["id"])
                     self._save_event(event_data)
 
-                skip += len(results)
+                skip += len(results) # type: ignore
                 if skip >= total or not results:
                     break
         except Exception as e:
@@ -191,7 +189,7 @@ class FDAMaudeCrawler(BaseCrawler):
                                 reference_table="adverse_events",
                             )
 
-                    skip += len(results)
+                    skip += len(results) # type: ignore # type: ignore
                     if skip >= total or not results:
                         break
 
