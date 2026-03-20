@@ -16,24 +16,27 @@ class FDAMaudeCrawler(BaseCrawler):
         super().__init__("fda_maude")
         self._min_interval = 1.5
 
-    def _build_search_query(self, product: dict) -> str:
+    def _build_search_query(self, product: dict, historical: bool = False) -> str:
         """根據產品設定建立搜尋查詢"""
         parts = []
 
         codes = [c.strip() for c in product.get("fda_product_codes", "").split(",") if c.strip()]
         if codes:
-            code_queries = [f'device.product_code:"{code}"' for code in codes]
+            # 使用正確的 MAUDE API 欄位名稱
+            code_queries = [f'device.device_report_product_code:"{code}"' for code in codes]
             parts.append(f'({" OR ".join(code_queries)})')
 
-        keywords = [k.strip() for k in product.get("keywords", "").split(",") if k.strip()]
-        if keywords:
-            kw_queries = []
-            for kw in keywords:
-                kw_queries.append(
-                    f'(device.brand_name:"{kw}" OR device.generic_name:"{kw}" OR '
-                    f'device.openfda.device_name:"{kw}" OR mdr_text.text:"{kw}")'
-                )
-            parts.append(f'({" OR ".join(kw_queries)})')
+        # 歷史同步只用 product code 不加關鍵字過濾（才能抓到全量資料）
+        if not historical:
+            keywords = [k.strip() for k in product.get("keywords", "").split(",") if k.strip()]
+            if keywords:
+                kw_queries = []
+                for kw in keywords:
+                    kw_queries.append(
+                        f'(device.brand_name:"{kw}" OR device.generic_name:"{kw}" OR '
+                        f'mdr_text.text:"{kw}")'
+                    )
+                parts.append(f'({" OR ".join(kw_queries)})')
 
         return " AND ".join(parts) if parts else ""
 
@@ -155,7 +158,7 @@ class FDAMaudeCrawler(BaseCrawler):
         return all_raw_data
 
     def run(self, historical: bool = False):
-        """執行 MAUDE 不良事件爬蟲"""
+        """執行 MAUDE 不良事件爬蟲，historical=True 時採用分年抓取全量資料"""
         started_at = datetime.now().isoformat()
         products = self.get_active_products()
         total_found = 0
@@ -164,37 +167,63 @@ class FDAMaudeCrawler(BaseCrawler):
         logger.info(f"[{self.name}] 開始爬取 ({'歷史同步' if historical else '常規'}), 共 {len(products)} 個監控產品")
 
         for product in products:
-            search_query = self._build_search_query(product)
+            # historical 模式不加關鍵字，才能查到全量資料
+            search_query = self._build_search_query(product, historical=historical)
             if not search_query:
                 continue
 
             try:
-                skip = 0
-                # 如果是歷史同步則放寬到 10,000 筆，常規則 500 筆
-                max_results = 10000 if historical else 500 
-                while skip < max_results:
-                    data = self._fetch_events(search_query, limit=100, skip=skip)
-                    results: list = data.get("results", [])
-                    total: int = data.get("meta", {}).get("results", {}).get("total", 0)
+                if historical:
+                    # 歷史模式：以年份切割，每年最多 25000 筆，突破 API 上限
+                    start_year = 2000
+                    end_year = datetime.now().year
+                    for year in range(start_year, end_year + 1):
+                        year_query = f"({search_query}) AND date_received:[{year}0101 TO {year}1231]"
+                        skip = 0
+                        while skip < 24900:
+                            try:
+                                data = self._fetch_events(year_query, limit=100, skip=skip)
+                                results: list = data.get("results", [])
+                                total: int = data.get("meta", {}).get("results", {}).get("total", 0)
+                                for item in results:
+                                    event_data = self._parse_event(item, product["id"])
+                                    total_found += 1
+                                    if self._save_event(event_data):
+                                        total_new += 1
+                                skip += len(results)  # type: ignore
+                                if skip >= total or not results:
+                                    break
+                            except Exception:
+                                break  # 如果該年無資料，繼續下一年
+                        if total_found > 0 and total_found % 1000 == 0:
+                            logger.info(f"[{self.name}] 歷史同步進度: 已儲存 {total_new} 筆")
+                else:
+                    # 常規模式：最多抓近期 500 筆
+                    skip = 0
+                    max_results = 500
+                    while skip < max_results:
+                        data = self._fetch_events(search_query, limit=100, skip=skip)
+                        results = data.get("results", [])
+                        total = data.get("meta", {}).get("results", {}).get("total", 0)
 
-                    for item in results:
-                        event_data = self._parse_event(item, product["id"])
-                        total_found += 1
-                        if self._save_event(event_data):
-                            total_new += 1
-                            self.create_alert(
-                                alert_type="adverse_event",
-                                title=f"新不良事件: {event_data['brand_name']}",
-                                message=f"[{event_data['event_type']}] {event_data['event_description'][:150]}",
-                                source="FDA_MAUDE",
-                                reference_table="adverse_events",
-                            )
+                        for item in results:
+                            event_data = self._parse_event(item, product["id"])
+                            total_found += 1
+                            if self._save_event(event_data):
+                                total_new += 1
+                                self.create_alert(
+                                    alert_type="adverse_event",
+                                    title=f"新不良事件: {event_data['brand_name']}",
+                                    message=f"[{event_data['event_type']}] {event_data['event_description'][:150]}",
+                                    source="FDA_MAUDE",
+                                    reference_table="adverse_events",
+                                )
 
-                    skip += len(results) # type: ignore # type: ignore
-                    if skip >= total or not results:
-                        break
+                        skip += len(results)  # type: ignore
+                        if skip >= total or not results:
+                            break
 
-                logger.info(f"[{self.name}] 產品 '{product['name']}': 找到 {total} 筆")
+                logger.info(f"[{self.name}] 產品 '{product['name']}': 本輪共 {total_found} 筆")
 
             except Exception as e:
                 logger.error(f"[{self.name}] 產品 '{product['name']}' 爬取失敗: {e}")
