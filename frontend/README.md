@@ -1,16 +1,14 @@
-# React + Vite
+# MedWatch Frontend (React + Vite)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+這是 MedWatch 系統的前端介面，專注於提供醫療器材監控數據的可視化呈現。
 
-Currently, two official plugins are available:
+## 核心頁面
+- **Dashboard**: 指標摘要與最新提醒。
+- **Recalls / Events**: 召回與不良事件明細，支援展開查看詳情及 AI 深度分析。
+- **AI Analytics Reports**: 生成指定週期的 AI 統計報告。
+- **Product Management**: 定義要監控的 FDA 產品代碼與關鍵字。
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## 開發指令
+- `npm install`: 安裝依賴。
+- `npm run dev`: 啟動開發伺服器 (Port 5173)。
+- `npm run build`: 產出正式環境部署檔案。
