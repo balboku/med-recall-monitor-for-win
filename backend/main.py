@@ -73,8 +73,8 @@ def root():
 
 
 @app.post("/api/crawl/{crawler_name}")
-def trigger_crawl(crawler_name: str):
-    """手動觸發爬蟲"""
+def trigger_crawl(crawler_name: str, historical: bool = False):
+    """手動觸發爬蟲，支援 historical=true 抓取大量數據"""
     crawlers = {
         "fda_recall": FDARecallCrawler,
         "fda_maude": FDAMaudeCrawler,
@@ -90,13 +90,13 @@ def trigger_crawl(crawler_name: str):
         for name, cls in crawlers.items():
             try:
                 crawler = cls()
-                results[name] = crawler.run()
+                results[name] = crawler.run(historical=historical)
             except Exception as e:
                 results[name] = {"error": str(e)}
     else:
         try:
             crawler = crawlers[crawler_name]()
-            results[crawler_name] = crawler.run()
+            results[crawler_name] = crawler.run(historical=historical)
         except Exception as e:
             results[crawler_name] = {"error": str(e)}
 

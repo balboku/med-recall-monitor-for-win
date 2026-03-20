@@ -154,14 +154,14 @@ class FDAMaudeCrawler(BaseCrawler):
             
         return all_raw_data
 
-    def run(self):
+    def run(self, historical: bool = False):
         """執行 MAUDE 不良事件爬蟲"""
         started_at = datetime.now().isoformat()
         products = self.get_active_products()
         total_found = 0
         total_new = 0
 
-        logger.info(f"[{self.name}] 開始爬取，共 {len(products)} 個監控產品")
+        logger.info(f"[{self.name}] 開始爬取 ({'歷史同步' if historical else '常規'}), 共 {len(products)} 個監控產品")
 
         for product in products:
             search_query = self._build_search_query(product)
@@ -170,7 +170,8 @@ class FDAMaudeCrawler(BaseCrawler):
 
             try:
                 skip = 0
-                max_results = 500  # 限制每個產品日常最多取近 500 筆
+                # 如果是歷史同步則放寬到 10,000 筆，常規則 500 筆
+                max_results = 10000 if historical else 500 
                 while skip < max_results:
                     data = self._fetch_events(search_query, limit=100, skip=skip)
                     results: list = data.get("results", [])

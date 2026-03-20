@@ -48,6 +48,6 @@ export const api = {
   analyzeRecord: (data) => request('/reports/analyze-record', { method: 'POST', body: JSON.stringify(data) }),
 
   // Crawl
-  triggerCrawl: (name) => request(`/crawl/${name}`, { method: 'POST' }),
+  triggerCrawl: (name, historical = false) => request(`/crawl/${name}${historical ? '?historical=true' : ''}`, { method: 'POST' }),
   getCrawlLogs: () => request('/crawl/logs'),
 };

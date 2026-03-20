@@ -217,7 +217,7 @@ class StandardsCrawler(BaseCrawler):
         finally:
             conn.close()
 
-    def run(self):
+    def run(self, **kwargs):
         """執行標準版本檢查"""
         started_at = datetime.now().isoformat()
         total_checked = 0

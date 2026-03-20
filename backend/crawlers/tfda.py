@@ -111,7 +111,7 @@ class TFDACrawler(BaseCrawler):
         finally:
             conn.close()
 
-    def run(self):
+    def run(self, **kwargs):
         """執行 TFDA 爬蟲"""
         started_at = datetime.now().isoformat()
         products = self.get_active_products()

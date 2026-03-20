@@ -134,7 +134,7 @@ class FDARecallCrawler(BaseCrawler):
             
         return all_raw_data
 
-    def run(self):
+    def run(self, **kwargs):
         """執行 FDA 召回爬蟲 (日常差量更新)"""
         started_at = datetime.now().isoformat()
         products = self.get_active_products()

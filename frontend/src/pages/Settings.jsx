@@ -16,13 +16,14 @@ export default function Settings() {
 
   useEffect(() => { fetchLogs(); }, []);
 
-  const handleCrawl = async (name) => {
-    setCrawling((prev) => ({ ...prev, [name]: true }));
+  const handleCrawl = async (name, historical = false) => {
+    const key = historical ? `${name}_hist` : name;
+    setCrawling((prev) => ({ ...prev, [key]: true }));
     try {
-      await api.triggerCrawl(name);
+      await api.triggerCrawl(name, historical);
       await fetchLogs();
     } catch (e) { console.error(e); }
-    finally { setCrawling((prev) => ({ ...prev, [name]: false })); }
+    finally { setCrawling((prev) => ({ ...prev, [key]: false })); }
   };
 
   const crawlers = [
@@ -68,8 +69,27 @@ export default function Settings() {
             >
               {crawling[c.name] ? (
                 <><span className="spinner" style={{ width: 14, height: 14 }}></span> 執行中…</>
-              ) : '▶ 手動執行'}
+              ) : '▶ 立即爬取'}
             </button>
+            {(c.name === 'fda_maude' || c.name === 'fda_recall') && (
+              <button
+                className="btn btn-sm"
+                onClick={() => handleCrawl(c.name, true)}
+                disabled={crawling[`${c.name}_hist`]}
+                style={{ 
+                  width: '100%', 
+                  marginTop: 8, 
+                  justifyContent: 'center',
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px border var(--primary-color)',
+                  color: 'var(--primary-color)'
+                }}
+              >
+                {crawling[`${c.name}_hist`] ? (
+                  <><span className="spinner" style={{ width: 14, height: 14 }}></span> 同步中…</>
+                ) : '📥 歷史大量資料同步'}
+              </button>
+            )}
           </div>
         ))}
       </div>

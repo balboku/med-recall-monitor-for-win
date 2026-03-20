@@ -81,6 +81,6 @@ class BaseCrawler:
         finally:
             conn.close()
 
-    def run(self):
+    def run(self, **kwargs):
         """執行爬蟲（子類別必須實作）"""
         raise NotImplementedError("子類別必須實作 run() 方法")
