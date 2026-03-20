@@ -7,7 +7,8 @@ from config import DATABASE_PATH
 def get_db():
     """取得資料庫連線"""
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DATABASE_PATH))
+    # 增加 timeout 以處理並行寫入時的繁忙狀態
+    conn = sqlite3.connect(str(DATABASE_PATH), timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")

@@ -2,6 +2,7 @@
 import json
 import logging
 from datetime import datetime
+from typing import Dict, Any
 from crawlers.base import BaseCrawler
 from database import get_db
 from config import FDA_EVENT_ENDPOINT, FDA_API_KEY
@@ -157,12 +158,12 @@ class FDAMaudeCrawler(BaseCrawler):
             
         return all_raw_data
 
-    def run(self, historical: bool = False):
+    def run(self, historical: bool = False) -> Dict[str, int]:
         """執行 MAUDE 不良事件爬蟲，historical=True 時採用分年抓取全量資料"""
         started_at = datetime.now().isoformat()
         products = self.get_active_products()
-        total_found = 0
-        total_new = 0
+        total_found: int = 0
+        total_new: int = 0
 
         logger.info(f"[{self.name}] 開始爬取 ({'歷史同步' if historical else '常規'}), 共 {len(products)} 個監控產品")
 
@@ -187,15 +188,15 @@ class FDAMaudeCrawler(BaseCrawler):
                                 total: int = data.get("meta", {}).get("results", {}).get("total", 0)
                                 for item in results:
                                     event_data = self._parse_event(item, product["id"])
-                                    total_found += 1
+                                    total_found = total_found + 1  # type: ignore
                                     if self._save_event(event_data):
-                                        total_new += 1
+                                        total_new = total_new + 1  # type: ignore
                                 skip += len(results)  # type: ignore
                                 if skip >= total or not results:
                                     break
                             except Exception:
                                 break  # 如果該年無資料，繼續下一年
-                        if total_found > 0 and total_found % 1000 == 0:
+                        if total_found > 0 and (total_found % 1000) == 0:  # type: ignore
                             logger.info(f"[{self.name}] 歷史同步進度: 已儲存 {total_new} 筆")
                 else:
                     # 常規模式：最多抓近期 500 筆
@@ -208,9 +209,9 @@ class FDAMaudeCrawler(BaseCrawler):
 
                         for item in results:
                             event_data = self._parse_event(item, product["id"])
-                            total_found += 1
+                            total_found = total_found + 1  # type: ignore
                             if self._save_event(event_data):
-                                total_new += 1
+                                total_new = total_new + 1  # type: ignore
                                 self.create_alert(
                                     alert_type="adverse_event",
                                     title=f"新不良事件: {event_data['brand_name']}",

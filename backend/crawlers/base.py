@@ -3,6 +3,7 @@ import time
 import logging
 import requests
 from datetime import datetime
+from typing import Optional, List, Dict, Any
 from database import get_db
 from config import REQUEST_TIMEOUT, REQUEST_HEADERS
 
@@ -17,7 +18,7 @@ class BaseCrawler:
         self.session = requests.Session()
         self.session.headers.update(REQUEST_HEADERS)
         self.timeout = REQUEST_TIMEOUT
-        self._last_request_time = 0
+        self._last_request_time: float = 0.0
         self._min_interval = 1.0  # 最小請求間隔（秒）
 
     def _rate_limit(self):
@@ -27,7 +28,7 @@ class BaseCrawler:
             time.sleep(self._min_interval - elapsed)
         self._last_request_time = time.time()
 
-    def get(self, url: str, params: dict = None) -> requests.Response:
+    def get(self, url: str, params: Optional[Dict[str, Any]] = None) -> requests.Response:
         """發送 GET 請求，含速率限制與錯誤處理"""
         self._rate_limit()
         try:
@@ -40,8 +41,8 @@ class BaseCrawler:
             raise
 
     def log_crawl(self, status: str, records_found: int = 0,
-                  new_records: int = 0, error_message: str = None,
-                  started_at: str = None):
+                  new_records: int = 0, error_message: Optional[str] = None,
+                  started_at: Optional[str] = None):
         """記錄爬蟲執行日誌"""
         conn = get_db()
         try:
@@ -56,8 +57,8 @@ class BaseCrawler:
             conn.close()
 
     def create_alert(self, alert_type: str, title: str, message: str,
-                     source: str, reference_id: int = None,
-                     reference_table: str = None):
+                     source: str, reference_id: Optional[int] = None,
+                     reference_table: Optional[str] = None):
         """建立新提醒通知"""
         conn = get_db()
         try:
@@ -70,7 +71,7 @@ class BaseCrawler:
         finally:
             conn.close()
 
-    def get_active_products(self) -> list:
+    def get_active_products(self) -> List[Dict[str, Any]]:
         """取得所有啟用中的監控產品"""
         conn = get_db()
         try:

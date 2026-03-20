@@ -1,5 +1,6 @@
 {
     "python.analysis.extraPaths": [
-        "./backend"
-    ]
+        "/Users/gukuntai/.gemini/antigravity/scratch/med-recall-monitor/backend"
+    ],
+    "python.analysis.typeCheckingMode": "basic"
 }

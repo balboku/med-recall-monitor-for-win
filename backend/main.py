@@ -1,7 +1,7 @@
-"""醫療器材召回與法規監控系統 — FastAPI 主程式"""
 import logging
+import threading
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from database import init_db
 from scheduler import init_scheduler, shutdown_scheduler
@@ -10,6 +10,7 @@ from crawlers.fda_recall import FDARecallCrawler
 from crawlers.fda_maude import FDAMaudeCrawler
 from crawlers.tfda import TFDACrawler
 from routes import products, recalls, events, standards, dashboard, reports
+from typing import Dict, Type, Any
 
 
 # 設定日誌
@@ -73,34 +74,37 @@ def root():
 
 
 @app.post("/api/crawl/{crawler_name}")
-def trigger_crawl(crawler_name: str, historical: bool = False):
-    """手動觸發爬蟲，支援 historical=true 抓取大量數據"""
-    crawlers = {
+async def trigger_crawl(crawler_name: str, historical: bool = False):
+    """手動觸發爬蟲（非同步執行），支援 historical=true 抓取大量數據"""
+    crawlers_map: Dict[str, Type[Any]] = {
         "fda_recall": FDARecallCrawler,
         "fda_maude": FDAMaudeCrawler,
         "tfda": TFDACrawler,
         "standards": StandardsCrawler,
     }
 
-    if crawler_name not in crawlers and crawler_name != "all":
-        return {"error": f"未知的爬蟲: {crawler_name}"}
+    if crawler_name not in crawlers_map and crawler_name != "all":
+        raise HTTPException(status_code=404, detail=f"未知的爬蟲: {crawler_name}")
 
-    results = {}
-    if crawler_name == "all":
-        for name, cls in crawlers.items():
-            try:
-                crawler = cls()
-                results[name] = crawler.run(historical=historical)
-            except Exception as e:
-                results[name] = {"error": str(e)}
-    else:
+    def run_crawl_task(name: str, cls: Type[Any], is_hist: bool):
         try:
-            crawler = crawlers[crawler_name]()
-            results[crawler_name] = crawler.run(historical=historical)
+            logger.info(f"開始執行背景爬取任務: {name} (historical={is_hist})")
+            crawler = cls()
+            crawler.run(historical=is_hist)
+            logger.info(f"背景爬取任務完成: {name}")
         except Exception as e:
-            results[crawler_name] = {"error": str(e)}
+            logger.error(f"背景爬取任務失敗: {name}, 錯誤: {e}")
 
-    return {"results": results}
+    if crawler_name == "all":
+        for name, cls in crawlers_map.items():
+            thread = threading.Thread(target=run_crawl_task, args=(name, cls, historical), daemon=True)
+            thread.start()
+        return {"message": "已在背景啟動所有爬蟲任務", "historical": historical}
+    else:
+        cls = crawlers_map[crawler_name]
+        thread = threading.Thread(target=run_crawl_task, args=(crawler_name, cls, historical), daemon=True)
+        thread.start()
+        return {"message": f"已在背景啟動 {crawler_name} 爬蟲任務", "historical": historical}
 
 
 @app.get("/api/crawl/logs")

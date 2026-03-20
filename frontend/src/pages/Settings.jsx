@@ -20,10 +20,19 @@ export default function Settings() {
     const key = historical ? `${name}_hist` : name;
     setCrawling((prev) => ({ ...prev, [key]: true }));
     try {
-      await api.triggerCrawl(name, historical);
-      await fetchLogs();
-    } catch (e) { console.error(e); }
-    finally { setCrawling((prev) => ({ ...prev, [key]: false })); }
+      const res = await api.triggerCrawl(name, historical);
+      // 因為後端現在是非同步，Res 會很快回來
+      console.log('Crawl triggered:', res);
+      // 延遲一下下重新抓取 Log，讓背景任務有機會寫入第一筆 Start Log
+      setTimeout(fetchLogs, 1000);
+      setTimeout(fetchLogs, 3000); // 3秒後再抓一次確認狀態
+    } catch (e) { 
+      console.error(e);
+      alert(`啟動失敗: ${e.message}`);
+    }
+    finally { 
+      setCrawling((prev) => ({ ...prev, [key]: false })); 
+    }
   };
 
   const crawlers = [
