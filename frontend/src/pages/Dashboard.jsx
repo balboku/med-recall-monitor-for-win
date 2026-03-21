@@ -173,8 +173,8 @@ export default function Dashboard() {
                   <Fragment key={`point-${d.month}`}>
                     {/* Recall 節點 */}
                     <div style={{ position: 'absolute', left, bottom: bottomRecalls, width: '8px', height: '8px', borderRadius: '50%', background: 'var(--bg-surface)', border: '2px solid var(--accent-blue)', transform: 'translate(-50%, 50%)', zIndex: 2, pointerEvents: 'none' }} />
-                    {/* Event 節點 */}
-                    <div style={{ position: 'absolute', left, bottom: bottomEvents, width: '8px', height: '8px', borderRadius: '50%', background: 'var(--bg-surface)', border: '2px solid var(--accent-red)', transform: 'translate(-50%, 50%)', zIndex: 2, pointerEvents: 'none' }} />
+                    {/* Event 節點 - 使用較亮且顯眼的顏色 */}
+                    <div style={{ position: 'absolute', left, bottom: bottomEvents, width: '9px', height: '9px', borderRadius: '50%', background: '#ff4d4f', border: '2px solid #fff', transform: 'translate(-50%, 50%)', zIndex: 3, pointerEvents: 'none', boxShadow: '0 0 4px rgba(255, 77, 79, 0.5)' }} />
                     
                     {/* 隱形透明感應柱 */}
                     <div 
