@@ -321,8 +321,11 @@ def migrate_db():
     for (sql,) in migrations:
         try:
             cursor.execute(sql)
+            conn.commit()
             migrated += 1
         except Exception:
+            if DATABASE_URL:
+                conn.rollback()
             pass
             
     _run_ddl(cursor, """
