@@ -43,8 +43,11 @@ services:
       - DATABASE_URL=postgresql://medwatch_user:medwatch_password@postgres:5432/medwatch
       - REDIS_URL=redis://redis:6379/0
       - ALLOWED_ORIGINS=http://localhost,http://localhost:5173
+      - PYTHONPATH=/app
     env_file:
       - ./backend/.env
+    volumes:
+      - ./backend:/app
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,8 +63,11 @@ services:
     environment:
       - DATABASE_URL=postgresql://medwatch_user:medwatch_password@postgres:5432/medwatch
       - REDIS_URL=redis://redis:6379/0
+      - PYTHONPATH=/app
     env_file:
       - ./backend/.env
+    volumes:
+      - ./backend:/app
     depends_on:
       postgres:
         condition: service_healthy
