@@ -1,4 +1,4 @@
-/** API 呼叫工具 */
+/** API 呼叫工具（v2: 含品保優化新端點） */
 const BASE = '/api';
 
 async function request(path, options = {}) {
@@ -19,6 +19,9 @@ export const api = {
   getAlerts: (params) => request(`/alerts?${new URLSearchParams(params)}`),
   markAlertRead: (id) => request(`/alerts/${id}/read`, { method: 'PUT' }),
   markAllAlertsRead: () => request('/alerts/read-all', { method: 'PUT' }),
+
+  // P2-2: 健康監控
+  getHealth: () => request('/health'),
 
   // Products
   getProducts: () => request('/products'),
@@ -41,11 +44,20 @@ export const api = {
   updateStandard: (id, data) => request(`/standards/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteStandard: (id) => request(`/standards/${id}`, { method: 'DELETE' }),
 
-  // Reports
+  // Reports（P1-3/P1-4: 含簽核狀態管理）
   getReports: () => request('/reports'),
   getReport: (id) => request(`/reports/${id}`),
   generateReport: (productId, data) => request(`/reports/generate/${productId}`, { method: 'POST', body: JSON.stringify(data) }),
+  approveReport: (id, data) => request(`/reports/${id}/approve`, { method: 'PUT', body: JSON.stringify(data) }),
   analyzeRecord: (data) => request('/reports/analyze-record', { method: 'POST', body: JSON.stringify(data) }),
+
+  // P3-2: 分析與趨勢
+  getTrend: (period = '3months') => request(`/analytics/trend?period=${period}`),
+  getCompetitorAnalysis: (fdaCode) => request(`/analytics/competitor?fda_code=${fdaCode}`),
+  getMrmSummary: () => request('/analytics/mrm-summary'),
+
+  // P1-2: 稽核日誌
+  getAuditLog: (params) => request(`/analytics/audit-log?${new URLSearchParams(params)}`),
 
   // Crawl
   triggerCrawl: (name, historical = false) => request(`/crawl/${name}${historical ? '?historical=true' : ''}`, { method: 'POST' }),

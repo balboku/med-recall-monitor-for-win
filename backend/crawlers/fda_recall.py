@@ -40,7 +40,7 @@ class FDARecallCrawler(BaseCrawler):
             return ""
         return " OR ".join(parts)
 
-    def _fetch_recalls(self, search_query: str, limit: int = 100, skip: int = 0) -> dict:
+    async def _fetch_recalls(self, search_query: str, limit: int = 100, skip: int = 0) -> dict:
         """從 FDA API 取得召回資料"""
         params = {
             "search": search_query,
@@ -50,12 +50,17 @@ class FDARecallCrawler(BaseCrawler):
         if FDA_API_KEY:
             params["api_key"] = FDA_API_KEY
 
-        response = self.get(FDA_RECALL_ENDPOINT, params=params)
+        response = await self.get(FDA_RECALL_ENDPOINT, params=params)
         return response.json()
 
     def _parse_recall(self, item: dict, product_id: int) -> dict:
         """解析單筆召回記錄"""
-        openfda = item.get("openfda", {})
+        # P1-1 修正：保留原始 Class I/II/III 分級，不被終止狀態覆蓋
+        # Class I = 最高危（可能造成嚴重傷害/死亡），Class II = 中度，Class III = 輕微
+        termination_date = item.get("event_date_terminated", "")
+        raw_status = item.get("status", "")
+        # 若有終止日期，在 status 中標記 Terminated，但保留原始 classification
+        computed_status = "Terminated" if termination_date else raw_status
         return {
             "product_id": product_id,
             "source": "FDA",
@@ -64,10 +69,10 @@ class FDARecallCrawler(BaseCrawler):
             "firm_name": item.get("recalling_firm", ""),
             "product_description": item.get("product_description", ""),
             "reason": item.get("reason_for_recall", ""),
-            "classification": item.get("event_date_terminated") and "Terminated" or item.get("classification", ""),
-            "status": item.get("status", ""),
+            "classification": item.get("classification", ""),  # 完整保留 Class I/II/III
+            "status": computed_status,
             "recall_date": item.get("center_classification_date", ""),
-            "termination_date": item.get("event_date_terminated", ""),
+            "termination_date": termination_date,
             "url": f"https://api.fda.gov/device/recall.json?search=res_event_number:{item.get('res_event_number', '')}",
             "raw_data": json.dumps(item, ensure_ascii=False),
         }
@@ -103,28 +108,27 @@ class FDARecallCrawler(BaseCrawler):
         finally:
             conn.close()
 
-    def run_history(self, product: dict, start_date: str, end_date: str):
-        """爬取指定產品與日期範圍的歷史紀錄，回傳原始資料清單"""
+    async def run_history(self, product: dict, start_date: str, end_date: str) -> int:
+        """爬取指定產品與日期範圍的歷史紀錄，直接儲存以避免 OOM，並回傳處理筆數"""
         search_query = self._build_search_query(product)
         if not search_query:
-            return []
+            return 0
             
         # start_date / end_date 需為 YYYYMMDD 格式
         history_query = f"({search_query}) AND recall_initiation_date:[{start_date} TO {end_date}]"
         
-        all_raw_data = []
+        total_processed = 0
         try:
             skip = 0
             while True:
-                data = self._fetch_recalls(history_query, limit=100, skip=skip)
+                data = await self._fetch_recalls(history_query, limit=100, skip=skip)
                 results: list = data.get("results", [])
                 total: int = data.get("meta", {}).get("results", {}).get("total", 0)
 
                 for item in results:
-                    all_raw_data.append(item)
-                    # 順便儲存到本地資料庫 (如果不存在)
                     recall_data = self._parse_recall(item, product["id"])
                     self._save_recall(recall_data)
+                    total_processed += 1
 
                 skip += len(results)
                 if skip >= total or not results:
@@ -132,9 +136,9 @@ class FDARecallCrawler(BaseCrawler):
         except Exception as e:
             logger.error(f"[{self.name}] 歷史爬取失敗: {e}")
             
-        return all_raw_data
+        return total_processed
 
-    def run(self, **kwargs):
+    async def run(self, **kwargs):
         """執行 FDA 召回爬蟲 (日常差量更新)"""
         started_at = datetime.now().isoformat()
         products = self.get_active_products()
@@ -153,7 +157,7 @@ class FDARecallCrawler(BaseCrawler):
                 skip = 0
                 while True:
                     # 日常爬取，不限制日期，僅取最新 (也可以在這裡加上近兩週的限制，但預設取100筆即可)
-                    data = self._fetch_recalls(search_query, limit=100, skip=skip)
+                    data = await self._fetch_recalls(search_query, limit=100, skip=skip)
                     results: list = data.get("results", [])
                     total: int = data.get("meta", {}).get("results", {}).get("total", 0)
 

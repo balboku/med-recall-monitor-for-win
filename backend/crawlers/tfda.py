@@ -17,13 +17,13 @@ class TFDACrawler(BaseCrawler):
         super().__init__("tfda")
         self._min_interval = 2.0  # 對政府網站放慢速率
 
-    def _fetch_page(self, page: int = 0) -> str:
+    async def _fetch_page(self, page: int = 0) -> str:
         """取得警訊列表頁面 HTML"""
         params = {
             "sid": "46",
             "p": page,
         }
-        response = self.get(TFDA_SAFETY_URL, params=params)
+        response = await self.get(TFDA_SAFETY_URL, params=params)
         response.encoding = "utf-8"
         return response.text
 
@@ -111,7 +111,7 @@ class TFDACrawler(BaseCrawler):
         finally:
             conn.close()
 
-    def run(self, **kwargs):
+    async def run(self, **kwargs):
         """執行 TFDA 爬蟲"""
         started_at = datetime.now().isoformat()
         products = self.get_active_products()
@@ -128,7 +128,7 @@ class TFDACrawler(BaseCrawler):
         try:
             # 爬取前 5 頁
             for page in range(5):
-                html = self._fetch_page(page)
+                html = await self._fetch_page(page)
                 items = self._parse_list(html)
 
                 if not items:

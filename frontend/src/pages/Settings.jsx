@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
+import { toast } from 'react-hot-toast';
 
 export default function Settings() {
   const [crawlLogs, setCrawlLogs] = useState([]);
@@ -23,12 +24,13 @@ export default function Settings() {
       const res = await api.triggerCrawl(name, historical);
       // 因為後端現在是非同步，Res 會很快回來
       console.log('Crawl triggered:', res);
+      toast.success(`已在背景啟動 ${name} ${historical ? '歷史完全同步' : '更新'} 爬蟲`);
       // 延遲一下下重新抓取 Log，讓背景任務有機會寫入第一筆 Start Log
       setTimeout(fetchLogs, 1000);
       setTimeout(fetchLogs, 3000); // 3秒後再抓一次確認狀態
     } catch (e) { 
       console.error(e);
-      alert(`啟動失敗: ${e.message}`);
+      toast.error(`啟動失敗: ${e.message}`);
     }
     finally { 
       setCrawling((prev) => ({ ...prev, [key]: false })); 

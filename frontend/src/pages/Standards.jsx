@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
+import { toast } from 'react-hot-toast';
 
 const emptyForm = { standard_number: '', title: '', current_version: '', source_url: '', notes: '' };
 
@@ -40,9 +41,11 @@ export default function Standards() {
       } else {
         await api.createStandard(form);
       }
+      }
       setShowModal(false);
       fetchStandards();
-    } catch (e) { alert(e.message); }
+      toast.success('儲存成功');
+    } catch (e) { toast.error(e.message); }
   };
 
   const handleDelete = async (id) => {

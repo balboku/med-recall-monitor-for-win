@@ -41,7 +41,7 @@ class FDAMaudeCrawler(BaseCrawler):
 
         return " AND ".join(parts) if parts else ""
 
-    def _fetch_events(self, search_query: str, limit: int = 100, skip: int = 0) -> dict:
+    async def _fetch_events(self, search_query: str, limit: int = 100, skip: int = 0) -> dict:
         """從 FDA API 取得不良事件資料"""
         params = {
             "search": search_query,
@@ -51,7 +51,7 @@ class FDAMaudeCrawler(BaseCrawler):
         if FDA_API_KEY:
             params["api_key"] = FDA_API_KEY
 
-        response = self.get(FDA_EVENT_ENDPOINT, params=params)
+        response = await self.get(FDA_EVENT_ENDPOINT, params=params)
         return response.json()
 
     def _parse_event(self, item: dict, product_id: int) -> dict:
@@ -129,26 +129,26 @@ class FDAMaudeCrawler(BaseCrawler):
         finally:
             conn.close()
 
-    def run_history(self, product: dict, start_date: str, end_date: str):
-        """爬取指定產品與日期範圍的大量歷史不良事件紀錄"""
+    async def run_history(self, product: dict, start_date: str, end_date: str) -> int:
+        """爬取指定產品與日期範圍的大量歷史不良事件紀錄，回傳處理筆數 (避免 OOM)"""
         search_query = self._build_search_query(product)
         if not search_query:
-            return []
+            return 0
             
         history_query = f"({search_query}) AND date_received:[{start_date} TO {end_date}]"
-        all_raw_data = []
+        total_processed = 0
         
         try:
             skip = 0
             while True:
-                data = self._fetch_events(history_query, limit=100, skip=skip)
+                data = await self._fetch_events(history_query, limit=100, skip=skip)
                 results = data.get("results", [])
                 total = data.get("meta", {}).get("results", {}).get("total", 0)
 
                 for item in results:
-                    all_raw_data.append(item)
                     event_data = self._parse_event(item, product["id"])
                     self._save_event(event_data)
+                    total_processed += 1
 
                 skip += len(results) # type: ignore
                 if skip >= total or not results:
@@ -156,9 +156,9 @@ class FDAMaudeCrawler(BaseCrawler):
         except Exception as e:
             logger.error(f"[{self.name}] 歷史爬取失敗: {e}")
             
-        return all_raw_data
+        return total_processed
 
-    def run(self, historical: bool = False) -> Dict[str, int]:
+    async def run(self, historical: bool = False, **kwargs) -> Dict[str, int]:
         """執行 MAUDE 不良事件爬蟲，historical=True 時採用分年抓取全量資料"""
         started_at = datetime.now().isoformat()
         products = self.get_active_products()
@@ -183,7 +183,7 @@ class FDAMaudeCrawler(BaseCrawler):
                         skip = 0
                         while skip < 24900:
                             try:
-                                data = self._fetch_events(year_query, limit=100, skip=skip)
+                                data = await self._fetch_events(year_query, limit=100, skip=skip)
                                 results: list = data.get("results", [])
                                 total: int = data.get("meta", {}).get("results", {}).get("total", 0)
                                 for item in results:
@@ -203,7 +203,7 @@ class FDAMaudeCrawler(BaseCrawler):
                     skip = 0
                     max_results = 500
                     while skip < max_results:
-                        data = self._fetch_events(search_query, limit=100, skip=skip)
+                        data = await self._fetch_events(search_query, limit=100, skip=skip)
                         results = data.get("results", [])
                         total = data.get("meta", {}).get("results", {}).get("total", 0)
 

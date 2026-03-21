@@ -60,7 +60,7 @@ class AIService:
                     contents=prompt,
                     config=config
                 )
-                return response.text
+                return response.text or ""
             except Exception as e:
                 err_str = str(e).lower()
                 # 判斷是否為配額限制或 429
@@ -85,22 +85,31 @@ class AIService:
             data = data[:1000000] + "\n...[資料截斷]"
             
         prompt = f"""
-你是一位專業的醫療器材品保與法規專家。請分析以下「{product_name}」在 {start_date} 到 {end_date} 期間的歷史召回與不良事件紀錄。
+你是一位專業的醫療器材品保與法規專家，熟悉 ISO 13485、ISO 14971、MDR 2017/745 與 IEC 60601 系列標準。
+請分析以下「{product_name}」在 {start_date} 到 {end_date} 期間的歷史召回與不良事件紀錄。
 這些紀錄包含 FDA 召回與 MAUDE 不良事件資料。
 
-原始資料 (JSON)：
+原始資料 (JSON):
 {data}
 
-請提供：
-1. 一份專業的專家總結報告（必須為 HTML 格式，不要給出 Markdown 程式碼區塊標記，只要純 HTML 字串。裡面可以使用 h3, p, ul, table 等標籤。內容應包含：問題重點總結、問題分類分析、風險評估、對品保工程師的建議）。
-2. 一份統計數據的 JSON 物件，包含屬性：total_recalls (整數)、total_events (整數)、top_issues (字串陣列，列出最常見的3個問題摘要)、critical_warnings (整數，死亡或嚴重傷害事件數)。
+請依下列法規框架提供兩個成果：
+
+1. **HTML 格式專家報告**（純 HTML 字串，不要 Markdown 區塊）內容必須包含：
+   a) 問題重點總結（主要失效模式 / Root Cause 推論）
+   b) **ISO 14971 風險矩陣評估**：用表格列出 TOP 3 風險，每項標註：
+      - 事件描述、嚴重性 (S1-S4)、發生機率 (P1-P5)、風險等級（S×P）
+   c) **FSCA 啟動判斷**：是否達到 Field Safety Corrective Action 門檻（請明述「建議啟動 FSCA」或「尚未達到 FSCA 門檻」）
+   d) **MDR Annex III PMSR 摘要**：符合上市後監督報告格式的篇幅總結
+   e) 給品保人員與設計單位的改善建議（可行動作清單）
+
+2. **統計數據 JSON 物件**，包含屬性：total_recalls (整數)、total_events (整數)、top_issues (字串陣列，最常見3個問題摘要)、critical_warnings (整數，死亡或嚴重傷害事件數)、fsca_recommended (布林值，是否建議啟動 FSCA)、max_risk_level (字串，最高風險等級如 "High/S3xP4")。
 
 請確保輸出為 JSON 物件，並遵循 response_schema。全程使用繁體中文。
 """
         schema = {
             "type": "OBJECT",
             "properties": {
-                "report_html": {"type": "STRING", "description": "符合要求的 HTML 格式重點報告"},
+                "report_html": {"type": "STRING", "description": "符合要求的 HTML 格式重點報告（含 ISO 14971 風險矩陣、FSCA 判斷、MDR PMSR 摘要）"},
                 "stats_json": {
                     "type": "OBJECT",
                     "properties": {
@@ -110,9 +119,12 @@ class AIService:
                             "type": "ARRAY",
                             "items": {"type": "STRING"}
                         },
-                        "critical_warnings": {"type": "INTEGER"}
+                        "critical_warnings": {"type": "INTEGER"},
+                        "fsca_recommended": {"type": "BOOLEAN"},
+                        "max_risk_level": {"type": "STRING"}
                     },
-                    "required": ["total_recalls", "total_events", "top_issues", "critical_warnings"]
+                    "required": ["total_recalls", "total_events", "top_issues",
+                                 "critical_warnings", "fsca_recommended", "max_risk_level"]
                 }
             },
             "required": ["report_html", "stats_json"]
@@ -136,20 +148,26 @@ class AIService:
 
     def analyze_single_record(self, record_type: str, raw_data: str) -> str:
         """
-        針對單筆紀錄進行深度專家級解析
+        P3-1: 針對單筆紀錄進行深度專家級解析（含 ISO 14971 風險矩陣與 FSCA 判斷）
         :return: HTML 格式字串
         """
         type_str = "FDA 產品召回記錄" if record_type == "recall" else "FDA MAUDE 不良事件報告"
-        
+
         prompt = f"""
-你是一位專業的醫療器材法規與品保專家。這裡有一筆 {type_str} 的單一紀錄。
-請對它進行深度解析。
-以安全的 HTML 片段格式輸出（不需要 html/body 標籤，直接從 <div> 或 <p> 開始即可，可使用強調查如 <strong>、<ul>等，不可包含惡意腳本）。
-內容應包含：
-1. 事件重點摘要（30 字內）
-2. 潛在的根本原因 (Root Cause 推論)
-3. 給品保人員與設計單位的改善建議
-4. 初步風險評估（高/中/低）與說明
+你是一位專業的醫療器材法規與品保專家，熟悉 ISO 14971、ISO 13485、MDR 2017/745 與 21 CFR Part 803。
+這裡有一筆 {type_str} 的單一紀錄。
+請依下列法規框架進行深度解析，以安全的 HTML 片段格式輸出
+（不需要 html/body 標籤，直接從 <div> 或 <p> 開始，可使用 <strong>、<ul>、<table> 等，不可包含惡意腳本）。
+
+解析內容必須包含：
+1. **事件重點摘要**（30 字內）
+2. **根本原因推論**（Root Cause Analysis）：推論可能的技術或系統根本原因
+3. **ISO 14971 風險評估**：
+   - 嚴重性 (Severity): S1(忽略)/S2(輕微)/S3(單一大)/S4(死亡)
+   - 發生機率 (Probability): P1(極低)/P2(低)/P3(中)/P4(高)/P5(幾乎必發生)
+   - 風險等級評定（低/中/高）與說明
+4. **FSCA 判斷**：是否達到 Field Safety Corrective Action 啟動門檻
+5. **給品保人員與設計單位的改善建議**（可行動作清單）
 
 請以繁體中文回答，不需要前後回傳 markdown 區塊控制碼。
 
@@ -170,3 +188,4 @@ class AIService:
 
 # 單一實例導出
 ai_service = AIService()
+

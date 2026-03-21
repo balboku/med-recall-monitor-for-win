@@ -1,7 +1,8 @@
 """爬蟲基底類別 — 提供共用的 HTTP 請求、錯誤處理、速率限制、日誌記錄"""
 import time
+import asyncio
 import logging
-import requests
+import httpx
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from database import get_db
@@ -15,30 +16,52 @@ class BaseCrawler:
 
     def __init__(self, name: str):
         self.name = name
-        self.session = requests.Session()
-        self.session.headers.update(REQUEST_HEADERS)
+        self.client = httpx.AsyncClient(headers=REQUEST_HEADERS, timeout=REQUEST_TIMEOUT)
         self.timeout = REQUEST_TIMEOUT
         self._last_request_time: float = 0.0
         self._min_interval = 1.0  # 最小請求間隔（秒）
 
-    def _rate_limit(self):
+    async def _rate_limit(self):
         """速率限制：確保請求間隔不小於最小間隔"""
         elapsed = time.time() - self._last_request_time
         if elapsed < self._min_interval:
-            time.sleep(self._min_interval - elapsed)
+            await asyncio.sleep(self._min_interval - elapsed)
         self._last_request_time = time.time()
 
-    def get(self, url: str, params: Optional[Dict[str, Any]] = None) -> requests.Response:
-        """發送 GET 請求，含速率限制與錯誤處理"""
-        self._rate_limit()
-        try:
-            response = self.session.get(url, params=params, timeout=self.timeout)
-            response.raise_for_status()
-            logger.info(f"[{self.name}] GET {url} -> {response.status_code}")
-            return response
-        except requests.exceptions.RequestException as e:
-            logger.error(f"[{self.name}] GET {url} 失敗: {e}")
-            raise
+    async def get(self, url: str, params: Optional[Dict[str, Any]] = None) -> httpx.Response:
+        """發送 GET 請求，含速率限制與自動重試機制（處理 429/50x 與網路異常）"""
+        max_retries = 5
+        base_delay = 2.0
+        
+        for attempt in range(max_retries):
+            await self._rate_limit()
+            try:
+                response = await self.client.get(url, params=params)
+                response.raise_for_status()
+                logger.info(f"[{self.name}] GET {url} -> {response.status_code}")
+                return response
+            except httpx.HTTPStatusError as e:
+                status_code = getattr(e.response, "status_code", None)
+                if status_code in (429, 500, 502, 503, 504):
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"[{self.name}] 請求 {url} 遇到 {status_code}，{delay} 秒後重試 ({attempt+1}/{max_retries})")
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"[{self.name}] GET {url} 失敗且不重試: {e}")
+                    raise
+            except httpx.RequestError as e:
+                delay = base_delay * (2 ** attempt)
+                logger.warning(f"[{self.name}] 請求 {url} 網路異常: {e}，{delay} 秒後重試 ({attempt+1}/{max_retries})")
+                await asyncio.sleep(delay)
+                continue
+                
+        # 超過重試次數後仍失敗
+        raise httpx.RequestError(f"[{self.name}] GET {url} 達到最大重試次數 ({max_retries})", request=httpx.Request("GET", url))
+
+    async def close(self):
+        """關閉 HTTP client 連線"""
+        await self.client.aclose()
 
     def log_crawl(self, status: str, records_found: int = 0,
                   new_records: int = 0, error_message: Optional[str] = None,

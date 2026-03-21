@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
+import { toast } from 'react-hot-toast';
 
 const emptyForm = { name: '', keywords: '', fda_product_codes: '', description: '', is_active: true };
 
@@ -42,7 +43,8 @@ export default function Products() {
       }
       setShowModal(false);
       fetchProducts();
-    } catch (e) { alert(e.message); }
+      toast.success('儲存成功');
+    } catch (e) { toast.error(e.message); }
   };
 
   const handleDelete = async (id) => {

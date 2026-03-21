@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { Toaster } from 'react-hot-toast';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import Dashboard from './pages/Dashboard';
@@ -37,7 +38,11 @@ function AppContent() {
 
   useEffect(() => {
     fetchAlertCount();
-    const interval = setInterval(fetchAlertCount, 60000);
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchAlertCount();
+      }
+    }, 60000);
     return () => clearInterval(interval);
   }, [fetchAlertCount]);
 
@@ -45,6 +50,7 @@ function AppContent() {
 
   return (
     <div className="app-layout">
+      <Toaster position="top-center" />
       <Sidebar alertCount={alertCount} />
       <Header
         title={title}

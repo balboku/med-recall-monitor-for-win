@@ -126,10 +126,10 @@ class StandardsCrawler(BaseCrawler):
 
         return info
 
-    def _check_standard(self, standard_number: str, source_url: str) -> dict:
+    async def _check_standard(self, standard_number: str, source_url: str) -> dict:
         """檢查單一標準的最新版本"""
         try:
-            response = self.get(source_url)
+            response = await self.get(source_url)
             html = response.text
 
             if "iec.ch" in source_url:
@@ -157,8 +157,18 @@ class StandardsCrawler(BaseCrawler):
             logger.error(f"[{self.name}] 檢查 {standard_number} 失敗: {e}")
             return {}
 
+    def _normalize_version(self, version: str) -> str:
+        """標準化版本字串以利比對（移除空白、統一大小寫）"""
+        return version.strip().lower().replace(" ", "") if version else ""
+
+    def _is_under_revision(self, status_str: str) -> bool:
+        """P2-4: 判斷標準是否進入修訂中狀態"""
+        if not status_str:
+            return False
+        return any(kw in status_str.lower() for kw in ["under revision", "revision", "preliminary", "draft"])
+
     def _update_standard(self, standard_id: int, latest_info: dict) -> bool:
-        """更新標準版本資訊，回傳是否有更新"""
+        """P2-4: 更新標準版本資訊，回傳是否有更新（強化副版本比對）"""
         conn = get_db()
         try:
             row = conn.execute(
@@ -168,12 +178,16 @@ class StandardsCrawler(BaseCrawler):
             if not row:
                 return False
 
-            current_version = row["latest_version"] or row["current_version"] or ""
-            new_version = latest_info.get("version", "")
+            current_version = self._normalize_version(row["latest_version"] or row["current_version"] or "")
+            new_version = self._normalize_version(latest_info.get("version", ""))
+            status_str = latest_info.get("status", "")
 
-            has_update = False
-            if new_version and new_version != current_version and current_version:
-                has_update = True
+            # has_update 枚舉: 0=無變化, 1=版本更新, 2=進入修訂中
+            has_update = 0
+            if self._is_under_revision(status_str):
+                has_update = 2  # 標準進入修訂中，預告即將更版，需提前關注
+            elif new_version and current_version and new_version != current_version:
+                has_update = 1  # 版本號有實質變化
 
             conn.execute("""
                 UPDATE standards SET
@@ -184,15 +198,15 @@ class StandardsCrawler(BaseCrawler):
                     updated_at = ?
                 WHERE id = ?
             """, (
-                new_version or current_version,
-                latest_info.get("status"),
-                1 if has_update else 0,
+                latest_info.get("version") or row["latest_version"] or row["current_version"],
+                status_str or None,
+                has_update,
                 datetime.now().isoformat(),
                 datetime.now().isoformat(),
                 standard_id,
             ))
             conn.commit()
-            return has_update
+            return has_update > 0  # 版本更新或進入修訂中都算有更新
         finally:
             conn.close()
 
@@ -217,7 +231,7 @@ class StandardsCrawler(BaseCrawler):
         finally:
             conn.close()
 
-    def run(self, **kwargs):
+    async def run(self, **kwargs):
         """執行標準版本檢查"""
         started_at = datetime.now().isoformat()
         total_checked = 0
@@ -242,16 +256,28 @@ class StandardsCrawler(BaseCrawler):
             if not source_url:
                 continue
 
-            latest_info = self._check_standard(std["standard_number"], source_url)
+            latest_info = await self._check_standard(std["standard_number"], source_url)
             total_checked += 1
 
             if latest_info:
-                if self._update_standard(std["id"], latest_info):
+                updated = self._update_standard(std["id"], latest_info)
+                if updated:
                     total_updated += 1
+                    has_update_val = self._is_under_revision(latest_info.get("status", ""))
+                    alert_msg = (
+                        f"標準 {std['standard_number']} 進入修訂中狀態，請關注後續版本發布"
+                        if has_update_val
+                        else f"最新版本: {latest_info.get('version', 'N/A')}"
+                    )
+                    alert_title = (
+                        f"⚠️ 標準修訂中: {std['standard_number']}"
+                        if has_update_val
+                        else f"📋 標準更新: {std['standard_number']}"
+                    )
                     self.create_alert(
                         alert_type="standard_update",
-                        title=f"標準更新: {std['standard_number']}",
-                        message=f"最新版本: {latest_info.get('version', 'N/A')}",
+                        title=alert_title,
+                        message=alert_msg,
                         source="IEC/ISO",
                         reference_id=std["id"],
                         reference_table="standards",

@@ -1,5 +1,6 @@
 import os
 import sys
+import asyncio
 from datetime import datetime
 
 # 加入 backend 作為 module import base
@@ -7,7 +8,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from crawlers.fda_maude import FDAMaudeCrawler
 
-def fetch_all():
+async def fetch_all():
     crawler = FDAMaudeCrawler()
     products = crawler.get_active_products()
     found_lfl = False
@@ -25,8 +26,8 @@ def fetch_all():
                 print(f"開始抓取區間: {s_date} 到 {e_date} ... ", end="", flush=True)
                 
                 # 這裡調用歷史抓取函式 (內部會有 skip 分頁，單年不可能超過 2.5 萬筆)
-                records = crawler.run_history(p, s_date, e_date)
-                print(f"共取得並儲存了 {len(records)} 筆紀錄。")
+                count = await crawler.run_history(p, s_date, e_date)
+                print(f"共取得並儲存了 {count} 筆紀錄。")
                 
             print("所有年份回補完成！")
             
@@ -34,4 +35,4 @@ def fetch_all():
         print("查無 Product Code 為 LFL 的監控產品，請於前端先設定。")
 
 if __name__ == "__main__":
-    fetch_all()
+    asyncio.run(fetch_all())

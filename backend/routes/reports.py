@@ -1,7 +1,9 @@
 import json
-from fastapi import APIRouter, HTTPException
+from datetime import datetime
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from database import get_db
+from typing import Optional
+from database import get_db, write_audit_log
 
 from services.ai_service import ai_service
 from crawlers.fda_recall import FDARecallCrawler
@@ -9,38 +11,51 @@ from crawlers.fda_maude import FDAMaudeCrawler
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
+
 class GenerateReportRequest(BaseModel):
     start_date: str  # YYYY-MM-DD
     end_date: str    # YYYY-MM-DD
+    operator: Optional[str] = "system"
+
 
 class AnalyzeRecordRequest(BaseModel):
-    record_type: str # "recall" or "event"
+    record_type: str  # "recall" or "event"
     raw_data: str
+    record_id: Optional[int] = None
+
+
+class ApproveReportRequest(BaseModel):
+    operator: str     # 審核人員姓名/帳號
+    action: str       # "approve" 或 "supersede"
+    superseded_by: Optional[int] = None  # 若是廢止，填入取代的報告 ID
+
 
 @router.get("")
 def get_reports():
     conn = get_db()
     cursor = conn.cursor()
     reports = cursor.execute("""
-        SELECT r.id, r.product_id, p.name as product_name, r.start_date, r.end_date, r.stats_json, r.created_at
+        SELECT r.id, r.product_id, p.name as product_name, r.start_date, r.end_date,
+               r.stats_json, r.report_status, r.generated_by, r.approved_by,
+               r.approved_at, r.data_truncated, r.total_records_analyzed, r.created_at
         FROM reports r
         JOIN products p ON r.product_id = p.id
         ORDER BY r.id DESC
     """).fetchall()
-    
+
     result = []
     for r in reports:
         row = dict(r)
-        # Parse stats_json string back to dict for API JSON
         if row.get("stats_json"):
             try:
                 row["stats_json"] = json.loads(row["stats_json"])
-            except:
+            except Exception:
                 pass
         result.append(row)
-        
+
     conn.close()
     return result
+
 
 @router.get("/{report_id}")
 def get_report(report_id: int):
@@ -50,114 +65,181 @@ def get_report(report_id: int):
         "SELECT * FROM reports WHERE id = ?", (report_id,)
     ).fetchone()
     conn.close()
-    
+
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
-        
+
     row = dict(report)
     if row.get("stats_json"):
         try:
             row["stats_json"] = json.loads(row["stats_json"])
-        except:
+        except Exception:
             pass
-            
+
     return row
 
+
 @router.post("/generate/{product_id}")
-def generate_report(product_id: int, req: GenerateReportRequest):
+def generate_report(product_id: int, req: GenerateReportRequest, request: Request):
     conn = get_db()
     product = conn.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
     if not product:
         conn.close()
         raise HTTPException(status_code=404, detail="Product not found")
-        
+
     product_dict = dict(product)
-    
+
     # Format dates to YYYYMMDD for openFDA
     start_fmt = req.start_date.replace("-", "")
     end_fmt = req.end_date.replace("-", "")
-    
+
     recall_crawler = FDARecallCrawler()
     maude_crawler = FDAMaudeCrawler()
-    
+
     try:
-        # 爬取並儲存到本地
-        recalls_data = recall_crawler.run_history(product_dict, start_fmt, end_fmt)
-        events_data = maude_crawler.run_history(product_dict, start_fmt, end_fmt)
+        # P1-3: 追蹤是否發生資料截斷
+        import asyncio
+        recalls_data = asyncio.run(recall_crawler.run_history(product_dict, start_fmt, end_fmt))
+        events_data = asyncio.run(maude_crawler.run_history(product_dict, start_fmt, end_fmt))
     except Exception as e:
         conn.close()
         raise HTTPException(status_code=500, detail=f"Failed to fetch history: {str(e)}")
 
-    # 組合給 AI 閱讀的資料 (減少資料量，只保留摘要)
+    total_records = recalls_data + events_data
+
+    # 從資料庫取出這個產品在日期範圍內的紀錄
+    recalls_rows = conn.execute("""
+        SELECT reason, classification, recall_date FROM recalls
+        WHERE product_id = ? AND recall_date >= ? AND recall_date <= ?
+    """, (product_id, req.start_date, req.end_date)).fetchall()
+
+    events_rows = conn.execute("""
+        SELECT event_type, event_description, patient_outcome FROM adverse_events
+        WHERE product_id = ? AND date_received >= ? AND date_received <= ?
+    """, (product_id, req.start_date, req.end_date)).fetchall()
+
     combined_data = {
-        "recalls": [
-            {
-                "reason": r.get("reason_for_recall"), 
-                "classification": r.get("classification"),
-                "date": r.get("center_classification_date")
-            } for r in recalls_data
-        ],
-        "events": [
-            {
-                "type": r.get("event_type", ""), 
-                "description": r.get("mdr_text", [{}])[0].get("text", "")[:500], # 取前500字元
-                "outcome": r.get("patient", [{}])[0].get("sequence_number_outcome", "")
-            } for r in events_data
-        ]
+        "recalls": [dict(r) for r in recalls_rows],
+        "events": [dict(e) for e in events_rows],
     }
-    
+
+    raw_json = json.dumps(combined_data, ensure_ascii=False)
+    data_truncated = 0
+    if len(raw_json) > 1000000:
+        raw_json = raw_json[:1000000] + "\n...[資料截斷]"
+        data_truncated = 1
+
     html_report, stats_json = ai_service.generate_product_report(
-        product_dict["name"], req.start_date, req.end_date, json.dumps(combined_data, ensure_ascii=False)
+        product_dict["name"], req.start_date, req.end_date, raw_json
     )
-    
+
+    operator = req.operator or "system"
+    ip = request.client.host if request.client else None
+
+    # P1-3: 報告初始狀態為 draft
     cursor = conn.execute("""
-        INSERT INTO reports (product_id, start_date, end_date, report_html, stats_json, model_used)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (product_id, req.start_date, req.end_date, html_report, stats_json, "gemini-2.5-flash"))
+        INSERT INTO reports (product_id, start_date, end_date, report_html, stats_json,
+                             model_used, report_status, generated_by,
+                             data_truncated, total_records_analyzed)
+        VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
+    """, (product_id, req.start_date, req.end_date, html_report, stats_json,
+          "gemini-2.5-flash", operator, data_truncated, total_records))
     conn.commit()
     new_id = cursor.lastrowid
-    
+
+    # P1-2: 寫入稽核日誌
+    write_audit_log(conn, operator, "CREATE_REPORT", "reports",
+                    target_id=new_id, ip_address=ip)
+    conn.commit()
     conn.close()
-    
+
     stats_dict = {}
     try:
         stats_dict = json.loads(stats_json)
-    except:
+    except Exception:
         pass
-        
+
     return {
-        "id": new_id, 
+        "id": new_id,
         "product_id": product_id,
         "start_date": req.start_date,
         "end_date": req.end_date,
-        "report_html": html_report, 
-        "stats_json": stats_dict
+        "report_html": html_report,
+        "stats_json": stats_dict,
+        "report_status": "draft",
+        "generated_by": operator,
+        "data_truncated": data_truncated,
+        "total_records_analyzed": total_records,
     }
+
+
+@router.put("/{report_id}/approve")
+def approve_report(report_id: int, req: ApproveReportRequest, request: Request):
+    """P1-4: 報告審核/簽核端點（核准 or 廢止）"""
+    conn = get_db()
+    report = conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
+    if not report:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    old_status = report["report_status"]
+    ip = request.client.host if request.client else None
+
+    if req.action == "approve":
+        if old_status == "approved":
+            conn.close()
+            raise HTTPException(status_code=400, detail="報告已為核准狀態")
+        conn.execute("""
+            UPDATE reports SET report_status='approved', approved_by=?, approved_at=? WHERE id=?
+        """, (req.operator, datetime.now().isoformat(), report_id))
+        new_status = "approved"
+    elif req.action == "supersede":
+        conn.execute("""
+            UPDATE reports SET report_status='superseded', superseded_by=? WHERE id=?
+        """, (req.superseded_by, report_id))
+        new_status = "superseded"
+    else:
+        conn.close()
+        raise HTTPException(status_code=400, detail="action 必須為 'approve' 或 'supersede'")
+
+    # 寫入稽核日誌
+    write_audit_log(conn, req.operator, f"REPORT_{req.action.upper()}", "reports",
+                    target_id=report_id,
+                    old_value=old_status, new_value=new_status,
+                    ip_address=ip)
+    conn.commit()
+    conn.close()
+    return {"id": report_id, "report_status": new_status, "approved_by": req.operator}
+
+
+@router.get("/audit-log")
+def get_audit_log(limit: int = 50):
+    """P1-2: 取得稽核日誌"""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
 
 @router.post("/analyze-record")
 def analyze_record(req: AnalyzeRecordRequest):
-    """
-    單筆紀錄 AI 解析，存入資料表避免重複耗費額度
-    """
-    conn = get_db()
-    cursor = conn.cursor()
-    table_name = "recalls" if req.record_type == "recall" else "adverse_events"
-    record = cursor.execute(f"SELECT * FROM {table_name} WHERE id = ?", (req.record_id,)).fetchone()
-    if not record:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Record not found")
-        
-    row = dict(record)
-    if row.get("ai_analysis"):
-        conn.close()
-        return {"html": row["ai_analysis"]}
-        
-    # 如果沒解析過就呼叫 AI
-    html_insight = ai_service.analyze_single_record(req.record_type, row["raw_data"])
-    
-    # 回寫結果
-    cursor.execute(f"UPDATE {table_name} SET ai_analysis = ? WHERE id = ?", (html_insight, req.record_id))
-    conn.commit()
-    conn.close()
+    """單筆紀錄 AI 解析，存入資料表避免重複耗費額度"""
+    html_insight = ai_service.analyze_single_record(req.record_type, req.raw_data)
+
+    if req.record_id:
+        table_name = "recalls" if req.record_type == "recall" else "adverse_events"
+        conn = get_db()
+        try:
+            conn.execute(f"UPDATE {table_name} SET ai_analysis = ? WHERE id = ?",
+                         (html_insight, req.record_id))
+            conn.commit()
+        except Exception:
+            pass  # ai_analysis 欄位可能尚未存在，忽略
+        finally:
+            conn.close()
 
     return {"html": html_insight}
