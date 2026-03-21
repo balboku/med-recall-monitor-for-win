@@ -109,41 +109,65 @@ def generate_report(product_id: int, req: GenerateReportRequest, request: Reques
 
     # 從資料庫取出這個產品在日期範圍內的紀錄
     recalls_rows = conn.execute("""
-        SELECT reason, classification, recall_date FROM recalls
+        SELECT product_description, firm_name, reason, classification, recall_date FROM recalls
         WHERE product_id = ? AND recall_date >= ? AND recall_date <= ?
     """, (product_id, req.start_date, req.end_date)).fetchall()
 
     events_rows = conn.execute("""
-        SELECT event_type, event_description, patient_outcome FROM adverse_events
+        SELECT event_type, brand_name, manufacturer, event_description, patient_outcome FROM adverse_events
         WHERE product_id = ? AND date_received >= ? AND date_received <= ?
     """, (product_id, req.start_date, req.end_date)).fetchall()
 
-    combined_data = {
-        "recalls": [dict(r) for r in recalls_rows],
-        "events": [dict(e) for e in events_rows],
+    # --- 大數據分批處理邏輯 (Batch Analysis / Map-Reduce) ---
+    all_events = [dict(e) for e in events_rows]
+    all_recalls = [dict(r) for r in recalls_rows]
+    
+    # 1. 準備統計大項 (為 Reduce 階段提供真實基準)
+    total_stats = {
+        "total_events": len(all_events),
+        "total_recalls": len(all_recalls),
+        "death_count": len([e for e in all_events if e.get("event_type") == "Death" or (e.get("patient_outcome") and "DEATH" in str(e.get("patient_outcome")).upper())]),
+        "injury_count": len([e for e in all_events if e.get("event_type") == "Injury" or (e.get("patient_outcome") and "INJURY" in str(e.get("patient_outcome")).upper())]),
+        "malfunction_count": len([e for e in all_events if e.get("event_type") == "Malfunction"])
     }
 
-    raw_json = json.dumps(combined_data, ensure_ascii=False)
-    data_truncated = 0
-    if len(raw_json) > 1000000:
-        raw_json = raw_json[:1000000] + "\n...[資料截斷]"
-        data_truncated = 1
+    # 2. 分批進行 Map 分析 (每 500 筆一組)
+    batch_size = 500
+    batch_summaries = []
+    
+    # 處理召回 (通常數量較少，視為一個單獨批次)
+    if all_recalls:
+        recall_batch_json = json.dumps(all_recalls, ensure_ascii=False)
+        batch_summaries.append(ai_service.analyze_batch(f"產品召回資料: {recall_batch_json}"))
 
+    # 處理不良事件 (分批)
+    for i in range(0, len(all_events), batch_size):
+        batch = all_events[i:i + batch_size]
+        batch_json = json.dumps(batch, ensure_ascii=False)
+        # 呼叫 AI 進行該批次摘要
+        batch_summaries.append(ai_service.analyze_batch(f"不良事件批次 {i//batch_size + 1}: {batch_json}"))
+
+    # 3. Reduce 階段：產出最終摘要報告
     html_report, stats_json = ai_service.generate_product_report(
-        product_dict["name"], req.start_date, req.end_date, raw_json
+        product_dict["name"], req.start_date, req.end_date, batch_summaries, total_stats
     )
+
+    data_truncated = 0 # 已經分批處理，理論上不再有截斷問題
+    total_records = len(all_events) + len(all_recalls)
+
 
     operator = req.operator or "system"
     ip = request.client.host if request.client else None
 
     # P1-3: 報告初始狀態為 draft
+    from services.ai_service import MODEL_NAME
     cursor = conn.execute("""
         INSERT INTO reports (product_id, start_date, end_date, report_html, stats_json,
                              model_used, report_status, generated_by,
                              data_truncated, total_records_analyzed)
         VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
     """, (product_id, req.start_date, req.end_date, html_report, stats_json,
-          "gemini-2.5-flash", operator, data_truncated, total_records))
+          MODEL_NAME, operator, data_truncated, total_records))
     conn.commit()
     new_id = cursor.lastrowid
 

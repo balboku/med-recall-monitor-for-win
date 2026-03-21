@@ -12,6 +12,8 @@ def list_recalls(
     product_id: Optional[int] = None,
     classification: Optional[str] = None,
     search: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
@@ -35,6 +37,12 @@ def list_recalls(
                 "(r.product_description LIKE ? OR r.reason LIKE ? OR r.firm_name LIKE ?)"
             )
             params.extend([f"%{search}%"] * 3)
+        if start_date:
+            conditions.append("r.recall_date >= ?")
+            params.append(start_date)
+        if end_date:
+            conditions.append("r.recall_date <= ?")
+            params.append(end_date)
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         offset = (page - 1) * page_size

@@ -1,4 +1,3 @@
-import { useState, useEffect, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import Sidebar from './components/Sidebar';
@@ -12,6 +11,7 @@ import Settings from './pages/Settings';
 import Reports from './pages/Reports';
 import { api } from './api';
 import './index.css';
+import { useQuery } from '@tanstack/react-query';
 
 const pageTitles = {
   '/': 'Dashboard 總覽',
@@ -25,26 +25,15 @@ const pageTitles = {
 
 function AppContent() {
   const location = useLocation();
-  const [alertCount, setAlertCount] = useState(0);
 
-  const fetchAlertCount = useCallback(async () => {
-    try {
-      const data = await api.getDashboard();
-      setAlertCount(data.unread_alerts || 0);
-    } catch {
-      /* ignore */
-    }
-  }, []);
+  const { data: dashboardData, refetch: fetchAlertCount } = useQuery({
+    queryKey: ['dashboard'],
+    queryFn: () => api.getDashboard(),
+    refetchInterval: 60000,
+    refetchOnWindowFocus: true,
+  });
 
-  useEffect(() => {
-    fetchAlertCount();
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        fetchAlertCount();
-      }
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [fetchAlertCount]);
+  const alertCount = dashboardData?.unread_alerts || 0;
 
   const title = pageTitles[location.pathname] || 'MedWatch';
 
@@ -59,7 +48,7 @@ function AppContent() {
       />
       <main className="main-content">
         <Routes>
-          <Route path="/" element={<Dashboard onUpdate={fetchAlertCount} />} />
+          <Route path="/" element={<Dashboard />} />
           <Route path="/products" element={<Products />} />
           <Route path="/recalls" element={<Recalls />} />
           <Route path="/events" element={<Events />} />

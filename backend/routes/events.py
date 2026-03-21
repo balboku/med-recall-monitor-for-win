@@ -12,6 +12,8 @@ def list_events(
     product_id: Optional[int] = None,
     event_type: Optional[str] = None,
     search: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
@@ -35,6 +37,12 @@ def list_events(
                 "(e.event_description LIKE ? OR e.brand_name LIKE ? OR e.manufacturer LIKE ?)"
             )
             params.extend([f"%{search}%"] * 3)
+        if start_date:
+            conditions.append("e.date_received >= ?")
+            params.append(start_date)
+        if end_date:
+            conditions.append("e.date_received <= ?")
+            params.append(end_date)
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         offset = (page - 1) * page_size

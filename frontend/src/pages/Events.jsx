@@ -1,15 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../api';
 
 export default function Events() {
-  const [events, setEvents] = useState([]);
-  const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [pages, setPages] = useState(1);
   const [search, setSearch] = useState('');
   const [eventType, setEventType] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState(null);
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [expandedId, setExpandedId] = useState(null);
   const [aiInsights, setAiInsights] = useState({});
 
@@ -19,33 +17,37 @@ export default function Events() {
     try {
       const res = await api.analyzeRecord({ record_type: type, record_id: record.id });
       setAiInsights(prev => ({ ...prev, [record.id]: res.html }));
-    } catch (e) {
+    } catch {
       setAiInsights(prev => ({ ...prev, [record.id]: '<span class="text-status-error">分析錯誤，請重試</span>' }));
     }
   };
 
-  const fetchEvents = async () => {
-    setLoading(true);
-    try {
+  const { data: pageData, isFetching: loading } = useQuery({
+    queryKey: ['events', { page, search, eventType, startDate, endDate }],
+    queryFn: () => {
       const params = { page, page_size: 15 };
       if (search) params.search = search;
       if (eventType) params.event_type = eventType;
+      if (startDate) params.start_date = startDate;
+      if (endDate) params.end_date = endDate;
+      return api.getEvents(params);
+    },
+    placeholderData: (previousData) => previousData,
+  });
 
-      const [data, statsData] = await Promise.all([
-        api.getEvents(params),
-        page === 1 ? api.getEventStats() : Promise.resolve(stats),
-      ]);
-      setEvents(data.items || []);
-      setTotal(data.total);
-      setPages(data.pages || 1);
-      if (page === 1) setStats(statsData);
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
+  const { data: stats } = useQuery({
+    queryKey: ['events_stats'],
+    queryFn: () => api.getEventStats(),
+  });
+
+  const events = pageData?.items || [];
+  const total = pageData?.total || 0;
+  const pages = pageData?.pages || 1;
+
+  const handleSearch = (e) => {
+    e.preventDefault();
+    setPage(1);
   };
-
-  useEffect(() => { fetchEvents(); }, [page, eventType]);
-
-  const handleSearch = (e) => { e.preventDefault(); setPage(1); fetchEvents(); };
 
   const typeColor = (t) => {
     if (!t) return 'blue';
@@ -78,7 +80,7 @@ export default function Events() {
       )}
 
       <form className="search-bar" onSubmit={handleSearch}>
-        <div className="search-input-wrapper">
+        <div className="search-input-wrapper" style={{ flex: 2 }}>
           <span className="search-icon">🔍</span>
           <input
             className="form-input"
@@ -87,7 +89,24 @@ export default function Events() {
             placeholder="搜尋品牌、廠商、事件描述…"
           />
         </div>
-        <select className="form-select" style={{ width: 'auto', minWidth: 160 }}
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <input 
+            type="date" 
+            className="form-input" 
+            style={{ width: 'auto' }}
+            value={startDate}
+            onChange={(e) => { setStartDate(e.target.value); setPage(1); }}
+          />
+          <span style={{ color: 'var(--text-tertiary)' }}>~</span>
+          <input 
+            type="date" 
+            className="form-input" 
+            style={{ width: 'auto' }}
+            value={endDate}
+            onChange={(e) => { setEndDate(e.target.value); setPage(1); }}
+          />
+        </div>
+        <select className="form-select" style={{ width: 'auto', minWidth: 140 }}
           value={eventType} onChange={(e) => { setEventType(e.target.value); setPage(1); }}>
           <option value="">所有事件類型</option>
           <option value="Death">Death</option>

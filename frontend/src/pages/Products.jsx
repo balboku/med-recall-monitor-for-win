@@ -1,25 +1,31 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { toast } from 'react-hot-toast';
 
 const emptyForm = { name: '', keywords: '', fda_product_codes: '', description: '', is_active: true };
 
 export default function Products() {
-  const [products, setProducts] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
 
-  const fetchProducts = async () => {
-    try {
-      const data = await api.getProducts();
-      setProducts(data);
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
-  };
+  const { data: products = [], isLoading: loading } = useQuery({
+    queryKey: ['products'],
+    queryFn: api.getProducts,
+  });
 
-  useEffect(() => { fetchProducts(); }, []);
+  const mutation = useMutation({
+    mutationFn: async ({ action, id, payload }) => {
+      if (action === 'create') return api.createProduct(payload);
+      if (action === 'update') return api.updateProduct(id, payload);
+      if (action === 'delete') return api.deleteProduct(id);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+    },
+  });
 
   const openNew = () => { setEditing(null); setForm(emptyForm); setShowModal(true); };
   const openEdit = (p) => {
@@ -36,26 +42,27 @@ export default function Products() {
 
   const handleSave = async () => {
     try {
-      if (editing) {
-        await api.updateProduct(editing.id, form);
-      } else {
-        await api.createProduct(form);
-      }
+      await mutation.mutateAsync({
+        action: editing ? 'update' : 'create',
+        id: editing?.id,
+        payload: form,
+      });
       setShowModal(false);
-      fetchProducts();
       toast.success('儲存成功');
     } catch (e) { toast.error(e.message); }
   };
 
   const handleDelete = async (id) => {
     if (!confirm('確定要刪除此產品嗎？')) return;
-    await api.deleteProduct(id);
-    fetchProducts();
+    try {
+      await mutation.mutateAsync({ action: 'delete', id });
+    } catch (e) { toast.error(e.message); }
   };
 
   const handleToggle = async (p) => {
-    await api.updateProduct(p.id, { is_active: !p.is_active });
-    fetchProducts();
+    try {
+      await mutation.mutateAsync({ action: 'update', id: p.id, payload: { is_active: !p.is_active } });
+    } catch (e) { toast.error(e.message); }
   };
 
   if (loading) {

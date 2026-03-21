@@ -22,8 +22,8 @@ KEYS = [k for k in KEYS if k]
 if not KEYS:
     logger.warning("未設定 Gemini API Keys，AI 服務可能無法運作。")
 
-# Model 設定 - 預設使用高速高額度模型
-MODEL_NAME = "gemini-2.5-flash"
+# Model 設定 - 使用具備更高額度 (500 RPD) 的 3.1 系列模型
+MODEL_NAME = "gemini-3.1-flash-lite-preview"
 
 
 class AIService:
@@ -41,10 +41,11 @@ class AIService:
 
     def _generate_with_retry(self, prompt: str, schema: Optional[dict] = None) -> str:
         if not self.client:
-            raise ValueError("未定義 API Key")
+            raise ValueError("未定義 API Key，請檢查 .env 設定。")
 
         max_retries = len(KEYS) * 2
         retries = 0
+        last_error = ""
 
         config_kwargs = {}
         if schema:
@@ -62,63 +63,155 @@ class AIService:
                 )
                 return response.text or ""
             except Exception as e:
-                err_str = str(e).lower()
+                last_error = str(e)
+                err_str = last_error.lower()
                 # 判斷是否為配額限制或 429
                 if "429" in err_str or "quota" in err_str or "exhausted" in err_str:
-                    logger.warning(f"⚠️ 觸發 API 限制或 429 Error，準備進行輪調: {e}")
+                    reason = "TPM (Tokens)" if "token_count" in err_str else "RPM/RPD (Requests)"
+                    # 實作 Exponential Backoff with Jitter ( Phase 3 )
+                    import random
+                    base_delay = 5.0
+                    delay = (base_delay * (2 ** retries)) + random.uniform(0.5, 2.5)
+                    logger.warning(f"⚠️ [Retry {retries+1}] 觸發 {reason} 限制或 429 Error。將等待 {delay:.2f} 秒後切換金鑰重試: {e}")
+                    time.sleep(delay)
                     self._rotate_key()
-                    time.sleep(2)
                     retries += 1
                 else:
-                    # 其他預期外錯誤
+                    # 其他預期外錯誤 (如 400 Bad Request, 500 等) 直接拋出
+                    logger.error(f"❌ [AI Service] 遭遇不可恢復之錯誤: {e}")
                     raise e
                     
-        raise RuntimeError("所有 API Key 皆已觸發速率限制或失效。")
+        raise RuntimeError(f"所有 API Key 皆已觸發速率限制或失效。最後錯誤：{last_error}")
 
-    def generate_product_report(self, product_name: str, start_date: str, end_date: str, data: str) -> Tuple[str, str]:
+    def analyze_batch(self, batch_data: str) -> str:
         """
-        產出總結報告，包含 HTML 與統計數據
-        :return: (report_html_string, stats_json_string)
+        Map 階段：對單一分次批次進行初步分析
         """
-        # 如果資料過大，進行簡單的截斷避免超過 Context Limits (Gemini 2.5 Flash 支援 1M+ tokens，通常不會超過，但以防萬一)
-        if len(data) > 1000000:
-            data = data[:1000000] + "\n...[資料截斷]"
-            
         prompt = f"""
-你是一位專業的醫療器材品保與法規專家，熟悉 ISO 13485、ISO 14971、MDR 2017/745 與 IEC 60601 系列標準。
-請分析以下「{product_name}」在 {start_date} 到 {end_date} 期間的歷史召回與不良事件紀錄。
-這些紀錄包含 FDA 召回與 MAUDE 不良事件資料。
+你是一位品保專家。請分析以下這組醫療器材紀錄（約 500 筆），並提供一個簡短的「風險摘要」。
+摘要必須包含：
+1. 數量統計（死亡、傷害、故障）。
+2. 這批次中最嚴重的 2-3 個問題點或失效模式。
+3. **品牌/型號識別**：從 `brand_name` 或 `product_description` 中識別出具體的子型號或不同品牌，並摘要其分佈情況。
+4. 任何異常的集中的傾向。
 
 原始資料 (JSON):
-{data}
+{batch_data}
 
-請依下列法規框架提供兩個成果：
+請以繁體中文回答，僅輸出摘要內容，不要包含 Markdown 標籤。
+"""
+        try:
+            return self._generate_with_retry(prompt).strip()
+        except Exception as e:
+            logger.error(f"Batch analysis failed: {e}")
+            return f"此批次分析失敗：{e}"
 
-1. **HTML 格式專家報告**（純 HTML 字串，不要 Markdown 區塊）內容必須包含：
-   a) 問題重點總結（主要失效模式 / Root Cause 推論）
-   b) **ISO 14971 風險矩陣評估**：用表格列出 TOP 3 風險，每項標註：
-      - 事件描述、嚴重性 (S1-S4)、發生機率 (P1-P5)、風險等級（S×P）
-   c) **FSCA 啟動判斷**：是否達到 Field Safety Corrective Action 門檻（請明述「建議啟動 FSCA」或「尚未達到 FSCA 門檻」）
-   d) **MDR Annex III PMSR 摘要**：符合上市後監督報告格式的篇幅總結
-   e) 給品保人員與設計單位的改善建議（可行動作清單）
+    def generate_product_report(self, product_name: str, start_date: str, end_date: str, 
+                                batch_summaries: list, total_stats: dict) -> Tuple[str, str]:
+        """
+        Reduce 階段：將所有分批摘要彙總為最終報告
+        """
+        summaries_text = "\n\n".join([f"--- 分批摘要 {i+1} ---\n{s}" for i, s in enumerate(batch_summaries)])
+        
+        # 專業報表樣式與圖表組件
+        report_style = """
+<style>
+    .qa-report { font-family: 'Segoe UI', Arial, sans-serif; color: #333; line-height: 1.6; max-width: 1000px; margin: auto; padding: 30px; background: #fff; border: 1px solid #eee; }
+    .qa-header { border-bottom: 3px solid #2c3e50; padding-bottom: 15px; margin-bottom: 25px; }
+    .qa-title { color: #2c3e50; font-size: 28px; margin: 0; }
+    .section-title { color: #2980b9; border-left: 6px solid #2980b9; padding-left: 12px; margin: 35px 0 15px; font-size: 22px; font-weight: bold; }
+    
+    /* 統計卡片 */
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 20px; margin-bottom: 30px; }
+    .stat-box { background: #fdfdfd; padding: 20px; border-radius: 8px; text-align: center; border: 1px solid #e1e8ed; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .stat-val { font-size: 24px; font-weight: bold; color: #e67e22; margin-bottom: 5px; }
+    .stat-label { font-size: 13px; color: #7f8c8d; font-weight: 600; }
+    
+    /* 長條圖樣式 (CSS Bar Chart) */
+    .chart-container { margin: 20px 0; background: #fafafa; padding: 20px; border-radius: 8px; }
+    .chart-title { font-size: 16px; font-weight: bold; margin-bottom: 15px; color: #444; text-align: center; }
+    .bar-row { display: flex; align-items: center; margin-bottom: 12px; }
+    .bar-label { width: 150px; font-size: 12px; color: #555; text-align: right; padding-right: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bar-wrapper { flex-grow: 1; background: #eee; height: 14px; border-radius: 7px; overflow: hidden; position: relative; }
+    .bar { height: 100%; background: linear-gradient(90deg, #3498db, #2980b9); border-radius: 7px; transition: width 1s ease-in-out; }
+    .bar-value { width: 40px; font-size: 12px; font-weight: bold; color: #2c3e50; padding-left: 10px; }
+    .bar-red { background: linear-gradient(90deg, #e74c3c, #c0392b); }
 
-2. **統計數據 JSON 物件**，包含屬性：total_recalls (整數)、total_events (整數)、top_issues (字串陣列，最常見3個問題摘要)、critical_warnings (整數，死亡或嚴重傷害事件數)、fsca_recommended (布林值，是否建議啟動 FSCA)、max_risk_level (字串，最高風險等級如 "High/S3xP4")。
+    /* 表格樣式 */
+    .risk-matrix { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px; }
+    .risk-matrix th, .risk-matrix td { border: 1px solid #dfe6e9; padding: 12px; text-align: center; }
+    .risk-matrix th { background-color: #f8f9fa; color: #2d3436; }
+    .risk-high { color: #d63031; font-weight: bold; }
+    
+    .capa-box { background: #fffdf0; border-right: 4px solid #f1c40f; border-left: 4px solid #f1c40f; padding: 20px; border-radius: 4px; margin: 20px 0; }
+</style>
+"""
 
-請確保輸出為 JSON 物件，並遵循 response_schema。全程使用繁體中文。
+        prompt = f"""
+你是一位資深的醫療器材品保與法規專家 (QA/RA Expert)。
+請根據以下數據產出「深度分類統計與視覺化」執行報告。
+
+產品名稱：{product_name}
+分析期間：{start_date} 到 {end_date}
+
+總體統計基準 (REAL TOTALS):
+{json.dumps(total_stats, ensure_ascii=False, indent=2)}
+
+各分批原始數據摘要 (包含個別事件中的品牌與故障代碼關鍵字):
+{summaries_text}
+
+請嚴格執行以下深度分析任務：
+
+1. **產品/品牌分類統計 (Product/Brand Analysis)**：
+   - 從分批摘要中識別並提取不同的子型號、品牌 (Brand Name) 或關鍵產品系列。
+   - 統計各品牌/型號的事件分佈。
+   - **務必確保此部分內容充實，即使資料有限也應根據現有描述進行歸納。**
+
+2. **故障模式分類統計 (Failure Mode Analysis)**：
+   - 歸納 Top 5 故障類型（例如：裝置斷裂、軟體錯誤、電池失效、包裝破損等）。
+   - 計算各類型的發生次數。
+
+3. **視覺化圖表生成 (Embedded Charts)**：
+   - **必須產出兩組圖表**：
+     - **A) 子產品/型號統計圖 (Product Distribution Chart)**：識別並統計不同品牌或型號。
+     - **B) 故障模式排行圖 (Top Failure Modes Chart)**：依頻率排序的失效原因。
+   - 使用我提供的圖表組件 ( .chart-container, .bar-row, .bar ) 實作。
+   - 例如：
+     <div class="chart-container">
+        <div class="chart-title">子產品/型號佔比分析</div>
+        <div class="bar-row">
+            <div class="bar-label">型號 A</div>
+            <div class="bar-wrapper"><div class="bar" style="width: 70%;"></div></div>
+            <div class="bar-value">145</div>
+        </div>
+     </div>
+     <div class="chart-container">
+        <div class="chart-title">故障模式分佈排行 Top 5</div>
+        <div class="bar-row">
+            <div class="bar-label">故障名稱</div>
+            <div class="bar-wrapper"><div class="bar-red" style="width: 80%; height: 100%;"></div></div>
+            <div class="bar-value">42</div>
+        </div>
+     </div>
+
+4. **專業報告章節 (HTML)**：
+   - **a) 執行摘要**。
+   - **b) 分類統計圖表區**：**必須包含上述兩組圖表**。
+   - **c) ISO 14971 風險深度矩陣**。
+   - **d) CAPA 具體行動建議**。
+
+請確保輸出為 JSON 物件，包含 report_html 與 stats_json（含屬性：total_recalls, total_events, top_issues, critical_warnings, fsca_recommended, max_risk_level）。全程使用繁體中文。
 """
         schema = {
             "type": "OBJECT",
             "properties": {
-                "report_html": {"type": "STRING", "description": "符合要求的 HTML 格式重點報告（含 ISO 14971 風險矩陣、FSCA 判斷、MDR PMSR 摘要）"},
+                "report_html": {"type": "STRING"},
                 "stats_json": {
                     "type": "OBJECT",
                     "properties": {
                         "total_recalls": {"type": "INTEGER"},
                         "total_events": {"type": "INTEGER"},
-                        "top_issues": {
-                            "type": "ARRAY",
-                            "items": {"type": "STRING"}
-                        },
+                        "top_issues": {"type": "ARRAY", "items": {"type": "STRING"}},
                         "critical_warnings": {"type": "INTEGER"},
                         "fsca_recommended": {"type": "BOOLEAN"},
                         "max_risk_level": {"type": "STRING"}
@@ -132,7 +225,6 @@ class AIService:
 
         try:
             response_text = self._generate_with_retry(prompt, schema=schema)
-            # 有時模型會包在 markdown 裡，這裡處理掉
             if response_text.startswith("```json"):
                 response_text = response_text[7:]
                 if response_text.endswith("```"):
@@ -140,11 +232,15 @@ class AIService:
             
             result = json.loads(response_text.strip())
             report_html = result.get("report_html", "<p>沒有產出報告內容</p>")
+            
+            # 串接樣式與內容
+            full_html = f"{report_style}\n<div class='qa-report'>\n{report_html}\n</div>"
+            
             stats_json = json.dumps(result.get("stats_json", {}))
-            return report_html, stats_json
+            return full_html, stats_json
         except Exception as e:
-            logger.error(f"Failed to generate report: {e}")
-            return f"<p style='color:red;'>產出報告失敗：{e}</p>", "{}"
+            logger.error(f"Failed to final report: {e}")
+            return f"<p style='color:red;'>最終彙整報告失敗：{e}</p>", "{}"
 
     def analyze_single_record(self, record_type: str, raw_data: str) -> str:
         """

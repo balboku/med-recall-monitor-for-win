@@ -55,23 +55,29 @@ class FDARecallCrawler(BaseCrawler):
 
     def _parse_recall(self, item: dict, product_id: int) -> dict:
         """解析單筆召回記錄"""
-        # P1-1 修正：保留原始 Class I/II/III 分級，不被終止狀態覆蓋
-        # Class I = 最高危（可能造成嚴重傷害/死亡），Class II = 中度，Class III = 輕微
         termination_date = item.get("event_date_terminated", "")
         raw_status = item.get("status", "")
-        # 若有終止日期，在 status 中標記 Terminated，但保留原始 classification
         computed_status = "Terminated" if termination_date else raw_status
+        
+        # 嘗試多個日期欄位：center_classification_date, recall_initiation_date, event_date_initiated
+        raw_date = item.get("center_classification_date") or item.get("recall_initiation_date") or item.get("event_date_initiated") or ""
+        
+        # 標準化為 YYYY-MM-DD
+        formatted_date = raw_date
+        if raw_date and len(raw_date) == 8 and "-" not in raw_date:
+            formatted_date = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}"
+            
         return {
             "product_id": product_id,
             "source": "FDA",
-            "recall_number": item.get("res_event_number", ""),
-            "event_id": str(item.get("event_id", "")),
+            "recall_number": item.get("product_res_number", ""), # 使用產品細項 ID 作為唯一編號
+            "event_id": item.get("res_event_number", ""),      # 將事件編號存入 event_id
             "firm_name": item.get("recalling_firm", ""),
             "product_description": item.get("product_description", ""),
             "reason": item.get("reason_for_recall", ""),
-            "classification": item.get("classification", ""),  # 完整保留 Class I/II/III
+            "classification": item.get("classification", ""),
             "status": computed_status,
-            "recall_date": item.get("center_classification_date", ""),
+            "recall_date": formatted_date,
             "termination_date": termination_date,
             "url": f"https://api.fda.gov/device/recall.json?search=res_event_number:{item.get('res_event_number', '')}",
             "raw_data": json.dumps(item, ensure_ascii=False),
@@ -81,6 +87,7 @@ class FDARecallCrawler(BaseCrawler):
         """儲存召回記錄，回傳是否為新記錄"""
         conn = get_db()
         try:
+            # 使用更細顆粒度的 product_res_number (存於 recall_number) 進行唯一性檢查
             existing = conn.execute(
                 "SELECT id FROM recalls WHERE recall_number = ?",
                 (recall_data["recall_number"],)
@@ -114,8 +121,9 @@ class FDARecallCrawler(BaseCrawler):
         if not search_query:
             return 0
             
-        # start_date / end_date 需為 YYYYMMDD 格式
-        history_query = f"({search_query}) AND recall_initiation_date:[{start_date} TO {end_date}]"
+        # start_date / end_date 建議為 YYYY-MM-DD 格式，與 MAUDE 爬蟲一致
+        # openFDA device/recall API 實測使用 event_date_initiated 較為穩定
+        history_query = f"({search_query}) AND event_date_initiated:[{start_date} TO {end_date}]"
         
         total_processed = 0
         try:

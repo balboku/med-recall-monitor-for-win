@@ -70,12 +70,9 @@ class FDAMaudeCrawler(BaseCrawler):
                 descriptions.append(t)
         event_description = " | ".join(descriptions[:3]) # type: ignore
 
-        # 判斷事件類型
-        event_types = []
-        if item.get("adverse_event_flag") == "Y":
-            event_types.append("Adverse Event")
-        if item.get("product_problem_flag") == "Y":
-            event_types.append("Product Problem")
+        # 判斷事件類型 (採用原生 FDA 分類如 Death, Injury, Malfunction)
+        raw_event_type = item.get("event_type")
+        event_type = raw_event_type if (raw_event_type and str(raw_event_type).strip() != "") else "Unknown"
 
         # 病患結果
         outcomes = []
@@ -85,12 +82,19 @@ class FDAMaudeCrawler(BaseCrawler):
         elif isinstance(sequences, str):
             outcomes = [sequences]
 
+        # 標準化 FDA 的 YYYYMMDD 日期為 YYYY-MM-DD (優先使用發生日，無則代入收到日)
+        raw_date = item.get("date_of_event", "")
+        if not raw_date or len(raw_date) != 8:
+            raw_date = item.get("date_received", "")
+            
+        formatted_date = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}" if len(raw_date) == 8 else raw_date
+
         return {
             "product_id": product_id,
             "source": "FDA_MAUDE",
             "report_number": item.get("report_number", ""),
-            "event_type": ", ".join(event_types) if event_types else "Unknown",
-            "date_received": item.get("date_received", ""),
+            "event_type": event_type,
+            "date_received": formatted_date,
             "brand_name": device.get("brand_name", ""),
             "manufacturer": device.get("manufacturer_d_name", ""),
             "device_problem": ", ".join(device.get("device_report_product_code", "") if isinstance(device.get("device_report_product_code"), list) else []),

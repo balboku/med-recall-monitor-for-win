@@ -53,6 +53,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# 加入 Prometheus 監控指標 Endpoint
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+    Instrumentator().instrument(app).expose(app)
+except ImportError:
+    logger.warning("prometheus_fastapi_instrumentator 未安裝，忽略指標暴露")
+
 # P2-3: CORS 改用環境變數白名單，不使用 allow_origins=["*"]
 _allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:4173")
 ALLOWED_ORIGINS = [o.strip() for o in _allowed_origins_env.split(",") if o.strip()]
@@ -139,36 +146,23 @@ def health_check():
 
 
 @app.post("/api/crawl/{crawler_name}")
-async def trigger_crawl(crawler_name: str, background_tasks: BackgroundTasks, historical: bool = False):
-    """手動觸發爬蟲（非同步執行），支援 historical=true 抓取大量數據"""
-    crawlers_map: Dict[str, Type[Any]] = {
-        "fda_recall": FDARecallCrawler,
-        "fda_maude": FDAMaudeCrawler,
-        "tfda": TFDACrawler,
-        "standards": StandardsCrawler,
-    }
+async def trigger_crawl(crawler_name: str, historical: bool = False):
+    """手動觸發爬蟲（轉交 Celery 非同步執行），支援 historical=true 抓取大量數據"""
+    from celery_app import run_crawler_task
+    valid_crawlers = ["fda_recall", "fda_maude", "tfda", "standards", "all"]
 
-    if crawler_name not in crawlers_map and crawler_name != "all":
+    if crawler_name not in valid_crawlers:
         raise HTTPException(status_code=404, detail=f"未知的爬蟲: {crawler_name}")
 
-    async def run_crawl_task(name: str, cls: Type[Any], is_hist: bool):
-        try:
-            logger.info(f"開始執行背景爬取任務: {name} (historical={is_hist})")
-            crawler = cls()
-            await crawler.run(historical=is_hist)
-            await crawler.close()
-            logger.info(f"背景爬取任務完成: {name}")
-        except Exception as e:
-            logger.error(f"背景爬取任務失敗: {name}, 錯誤: {e}")
-
     if crawler_name == "all":
-        for name, cls in crawlers_map.items():
-            background_tasks.add_task(run_crawl_task, name, cls, historical)
-        return {"message": "已在背景啟動所有爬蟲任務", "historical": historical}
+        for name in ["fda_recall", "fda_maude", "tfda", "standards"]:
+            logger.info(f"API: 觸發 Celery 背景爬取任務: {name} (historical={historical})")
+            run_crawler_task.delay(name, historical)
+        return {"message": "已在背景 Celery 佇列啟動所有爬蟲任務", "historical": historical}
     else:
-        cls = crawlers_map[crawler_name]
-        background_tasks.add_task(run_crawl_task, crawler_name, cls, historical)
-        return {"message": f"已在背景啟動 {crawler_name} 爬蟲任務", "historical": historical}
+        logger.info(f"API: 觸發 Celery 背景爬取任務: {crawler_name} (historical={historical})")
+        run_crawler_task.delay(crawler_name, historical)
+        return {"message": f"已在背景 Celery 佇列啟動 {crawler_name} 爬蟲任務", "historical": historical}
 
 
 @app.get("/api/crawl/logs")

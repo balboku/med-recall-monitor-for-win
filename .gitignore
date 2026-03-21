@@ -1,2 +1,17 @@
+# Databases
 backend/data/*.db
-backend/data/*.db
+*.db
+backend/monitor.db
+
+# Environment variables
+.env
+backend/.env
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+__pycache__/
+*.pyc
+
+# OS files
+.DS_Store

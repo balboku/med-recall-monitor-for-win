@@ -1,25 +1,31 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { toast } from 'react-hot-toast';
 
 const emptyForm = { standard_number: '', title: '', current_version: '', source_url: '', notes: '' };
 
 export default function Standards() {
-  const [standards, setStandards] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
 
-  const fetchStandards = async () => {
-    try {
-      const data = await api.getStandards();
-      setStandards(data);
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
-  };
+  const { data: standards = [], isLoading: loading } = useQuery({
+    queryKey: ['standards'],
+    queryFn: api.getStandards,
+  });
 
-  useEffect(() => { fetchStandards(); }, []);
+  const mutation = useMutation({
+    mutationFn: async ({ action, id, payload }) => {
+      if (action === 'create') return api.createStandard(payload);
+      if (action === 'update') return api.updateStandard(id, payload);
+      if (action === 'delete') return api.deleteStandard(id);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['standards'] });
+    },
+  });
 
   const openNew = () => { setEditing(null); setForm(emptyForm); setShowModal(true); };
   const openEdit = (s) => {
@@ -36,22 +42,21 @@ export default function Standards() {
 
   const handleSave = async () => {
     try {
-      if (editing) {
-        await api.updateStandard(editing.id, form);
-      } else {
-        await api.createStandard(form);
-      }
-      }
+      await mutation.mutateAsync({
+        action: editing ? 'update' : 'create',
+        id: editing?.id,
+        payload: form,
+      });
       setShowModal(false);
-      fetchStandards();
       toast.success('儲存成功');
     } catch (e) { toast.error(e.message); }
   };
 
   const handleDelete = async (id) => {
     if (!confirm('確定要移除此標準？')) return;
-    await api.deleteStandard(id);
-    fetchStandards();
+    try {
+      await mutation.mutateAsync({ action: 'delete', id });
+    } catch (e) { toast.error(e.message); }
   };
 
   if (loading) {

@@ -1,18 +1,132 @@
-"""SQLite 資料庫模型定義與初始化（v2: 含 Audit Trail 支援）"""
+"""SQLite / PostgreSQL 相容資料庫模型定義與初始化（v2: 含 Audit Trail 支援）"""
+import os
 import sqlite3
 from pathlib import Path
 from config import DATABASE_PATH
 
+DATABASE_URL = os.getenv("DATABASE_URL")
+pg_pool = None
+
+if DATABASE_URL:
+    try:
+        import psycopg2
+        import psycopg2.extras
+        from psycopg2 import pool
+        # 增加 maxconn 到 20 應付爬蟲高併發
+        pg_pool = pool.SimpleConnectionPool(1, 20, DATABASE_URL)
+        print("✅ 已啟用 PostgreSQL 連線池")
+    except ImportError:
+        print("⚠️ 未安裝 psycopg2，將回退至 SQLite")
+        DATABASE_URL = None
+    except Exception as e:
+        print(f"⚠️ 建立 PostgreSQL 連線池失敗: {e}，將回退至 SQLite")
+        DATABASE_URL = None
+
+
+class PgCursorWrapper:
+    def __init__(self, cursor):
+        self._cursor = cursor
+        self._lastrowid = None
+
+    def _convert_query(self, query):
+        import re
+        # 簡易的 ? 轉 %s 的替換
+        query = query.replace("?", "%s")
+        # SQLite LIKE 預設不分大小寫，PostgreSQL 需轉為 ILIKE
+        query = re.sub(r"(?i)\bLIKE\b", "ILIKE", query)
+        return query
+
+    def execute(self, query, params=None):
+        query = self._convert_query(query)
+        # PostgreSQL doesn't like datetime() without type cast if used like sqlite, but mostly we use standard SQL.
+        # SQLite's datetime('now', '-7 days') -> not natively compatible with Postgres
+        # We need a small hack to replace sqlite's datetime('now', '-X days') with Postgres' NOW() - INTERVAL 'X days'
+        import re
+        query = re.sub(r"datetime\('now',\s*'-(\d+)\s+days'\)", r"NOW() - INTERVAL '\1 days'", query)
+        
+        if params is not None:
+            self._cursor.execute(query, params)
+        else:
+            self._cursor.execute(query)
+            
+        q_upper = query.upper().strip()
+        if q_upper.startswith("INSERT "):
+            try:
+                self._cursor.execute("SELECT LASTVAL()")
+                row = self._cursor.fetchone()
+                if row:
+                    self._lastrowid = row[0]
+            except Exception:
+                pass
+        return self
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    def fetchmany(self, size=None):
+        if size is None:
+            return self._cursor.fetchmany()
+        return self._cursor.fetchmany(size)
+
+    def close(self):
+        self._cursor.close()
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+    @property
+    def lastrowid(self):
+        return self._lastrowid
+
+
+class PgConnectionWrapper:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self):
+        return PgCursorWrapper(self._conn.cursor(cursor_factory=psycopg2.extras.DictCursor))
+
+    def execute(self, query, params=None):
+        cur = self.cursor()
+        return cur.execute(query, params)
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        if pg_pool:
+            pg_pool.putconn(self._conn)
+        else:
+            self._conn.close()
+
 
 def get_db():
     """取得資料庫連線"""
-    DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    # 增加 timeout 以處理並行寫入時的繁忙狀態
-    conn = sqlite3.connect(str(DATABASE_PATH), timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    if pg_pool:
+        conn = pg_pool.getconn()
+        return PgConnectionWrapper(conn)
+    else:
+        DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(DATABASE_PATH), timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+
+def _run_ddl(cursor, sql):
+    if pg_pool:
+        # SQLite 轉 PostgreSQL 語法相容
+        sql = sql.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        sql = sql.replace("DATETIME DEFAULT CURRENT_TIMESTAMP", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cursor.execute(sql)
 
 
 def init_db():
@@ -20,8 +134,7 @@ def init_db():
     conn = get_db()
     cursor = conn.cursor()
 
-    # 使用者監控的產品清單
-    cursor.execute("""
+    _run_ddl(cursor, """
         CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -34,13 +147,12 @@ def init_db():
         )
     """)
 
-    # 召回記錄
-    cursor.execute("""
+    _run_ddl(cursor, """
         CREATE TABLE IF NOT EXISTS recalls (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             product_id INTEGER,
             source TEXT NOT NULL,
-            recall_number TEXT UNIQUE,
+            recall_number TEXT,
             event_id TEXT,
             firm_name TEXT,
             product_description TEXT,
@@ -56,8 +168,7 @@ def init_db():
         )
     """)
 
-    # 不良事件報告
-    cursor.execute("""
+    _run_ddl(cursor, """
         CREATE TABLE IF NOT EXISTS adverse_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             product_id INTEGER,
@@ -76,8 +187,7 @@ def init_db():
         )
     """)
 
-    # 法規標準追蹤
-    cursor.execute("""
+    _run_ddl(cursor, """
         CREATE TABLE IF NOT EXISTS standards (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             standard_number TEXT NOT NULL UNIQUE,
@@ -95,8 +205,7 @@ def init_db():
         )
     """)
 
-    # 提醒通知
-    cursor.execute("""
+    _run_ddl(cursor, """
         CREATE TABLE IF NOT EXISTS alerts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             alert_type TEXT NOT NULL,
@@ -115,8 +224,7 @@ def init_db():
         )
     """)
 
-    # AI 報告（P1-3: 加入簽核狀態管理欄位）
-    cursor.execute("""
+    _run_ddl(cursor, """
         CREATE TABLE IF NOT EXISTS reports (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             product_id INTEGER NOT NULL,
@@ -138,8 +246,7 @@ def init_db():
         )
     """)
 
-    # 爬蟲執行記錄
-    cursor.execute("""
+    _run_ddl(cursor, """
         CREATE TABLE IF NOT EXISTS crawl_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             crawler_name TEXT NOT NULL,
@@ -152,8 +259,7 @@ def init_db():
         )
     """)
 
-    # 稽核追蹤日誌表（P1-2: Audit Trail）
-    cursor.execute("""
+    _run_ddl(cursor, """
         CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             operator TEXT NOT NULL DEFAULT 'system',
@@ -167,40 +273,39 @@ def init_db():
         )
     """)
 
-    # recalls 表補充 CAPA 欄位
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS recalls_v2_check (id INTEGER PRIMARY KEY)
+    _run_ddl(cursor, """
+        CREATE TABLE IF NOT EXISTS recalls_v2_check (id INTEGER PRIMARY KEY AUTOINCREMENT)
     """)
 
-    # 建立索引（僅建立在全新安裝時就存在的欄位）
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_recalls_source ON recalls(source)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_recalls_date ON recalls(recall_date)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_source ON adverse_events(source)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_date ON adverse_events(date_received)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_read ON alerts(is_read)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_type ON alerts(alert_type)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_reports_product ON reports(product_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_table ON audit_log(target_table)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_operator ON audit_log(operator)")
+    # 建立索引
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_recalls_source ON recalls(source)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_recalls_date ON recalls(recall_date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_source ON adverse_events(source)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_date ON adverse_events(date_received)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_read ON alerts(is_read)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_type ON alerts(alert_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_reports_product ON reports(product_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_table ON audit_log(target_table)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_operator ON audit_log(operator)")
+    except Exception:
+        pass
 
     conn.commit()
     conn.close()
-    print("✅ 資料庫初始化完成（v2: Audit Trail 啟用）")
+    print("✅ 資料庫初始化完成（已相容 PostgreSQL）")
 
 
 def migrate_db():
-    """對既有資料庫進行欄位遷移（新增欄位不刪除舊資料）"""
     conn = get_db()
     cursor = conn.cursor()
 
     migrations = [
-        # alerts 表新增欄位
         ("ALTER TABLE alerts ADD COLUMN severity TEXT NOT NULL DEFAULT 'info'",),
         ("ALTER TABLE alerts ADD COLUMN read_at TIMESTAMP",),
         ("ALTER TABLE alerts ADD COLUMN read_by TEXT",),
         ("ALTER TABLE alerts ADD COLUMN capa_ref TEXT",),
         ("ALTER TABLE alerts ADD COLUMN sop_ref TEXT",),
-        # reports 表新增欄位
         ("ALTER TABLE reports ADD COLUMN report_status TEXT NOT NULL DEFAULT 'draft'",),
         ("ALTER TABLE reports ADD COLUMN generated_by TEXT",),
         ("ALTER TABLE reports ADD COLUMN approved_by TEXT",),
@@ -208,7 +313,6 @@ def migrate_db():
         ("ALTER TABLE reports ADD COLUMN superseded_by INTEGER",),
         ("ALTER TABLE reports ADD COLUMN data_truncated INTEGER NOT NULL DEFAULT 0",),
         ("ALTER TABLE reports ADD COLUMN total_records_analyzed INTEGER NOT NULL DEFAULT 0",),
-        # recalls 表新增欄位
         ("ALTER TABLE recalls ADD COLUMN capa_ref TEXT",),
         ("ALTER TABLE recalls ADD COLUMN capa_status TEXT",),
     ]
@@ -219,11 +323,9 @@ def migrate_db():
             cursor.execute(sql)
             migrated += 1
         except Exception:
-            # 欄位已存在時 SQLite 會丟出例外，忽略即可
             pass
-
-    # 建立 audit_log 表（若不存在）
-    cursor.execute("""
+            
+    _run_ddl(cursor, """
         CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             operator TEXT NOT NULL DEFAULT 'system',
@@ -236,20 +338,23 @@ def migrate_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_table ON audit_log(target_table)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_operator ON audit_log(operator)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_recalls_classification ON recalls(classification)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(report_status)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_severity ON alerts(severity)")
+    
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_table ON audit_log(target_table)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_operator ON audit_log(operator)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_recalls_classification ON recalls(classification)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(report_status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_severity ON alerts(severity)")
+    except Exception:
+        pass
 
     conn.commit()
     conn.close()
-    print(f"✅ 資料庫遷移完成，執行 {migrated} 項欄位新增")
+    print(f"✅ 資料庫遷移完成，執行 {migrated} 項欄位新增（已相容 PostgreSQL）")
 
 
 def write_audit_log(conn, operator: str, action: str, target_table: str,
                    target_id=None, old_value=None, new_value=None, ip_address=None):
-    """寫入稽核日誌（可在任何路由中呼叫）"""
     try:
         conn.execute("""
             INSERT INTO audit_log (operator, action, target_table, target_id,
@@ -257,7 +362,7 @@ def write_audit_log(conn, operator: str, action: str, target_table: str,
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (operator, action, target_table, target_id, old_value, new_value, ip_address))
     except Exception:
-        pass  # 稽核日誌寫入失敗不應中斷主要業務流程
+        pass
 
 
 if __name__ == "__main__":

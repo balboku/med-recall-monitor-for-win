@@ -1,16 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../api';
 
 export default function Recalls() {
-  const [recalls, setRecalls] = useState([]);
-  const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [pages, setPages] = useState(1);
   const [search, setSearch] = useState('');
   const [source, setSource] = useState('');
   const [classification, setClassification] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState(null);
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [expandedId, setExpandedId] = useState(null);
   const [aiInsights, setAiInsights] = useState({});
 
@@ -20,37 +18,37 @@ export default function Recalls() {
     try {
       const res = await api.analyzeRecord({ record_type: type, record_id: record.id });
       setAiInsights(prev => ({ ...prev, [record.id]: res.html }));
-    } catch (e) {
+    } catch {
       setAiInsights(prev => ({ ...prev, [record.id]: '<span class="text-status-error">分析錯誤，請重試</span>' }));
     }
   };
 
-  const fetchRecalls = async () => {
-    setLoading(true);
-    try {
+  const { data: pageData, isFetching: loading } = useQuery({
+    queryKey: ['recalls', { page, search, source, classification, startDate, endDate }],
+    queryFn: () => {
       const params = { page, page_size: 15 };
       if (search) params.search = search;
       if (source) params.source = source;
       if (classification) params.classification = classification;
+      if (startDate) params.start_date = startDate;
+      if (endDate) params.end_date = endDate;
+      return api.getRecalls(params);
+    },
+    placeholderData: (previousData) => previousData,
+  });
 
-      const [data, statsData] = await Promise.all([
-        api.getRecalls(params),
-        page === 1 ? api.getRecallStats() : Promise.resolve(stats),
-      ]);
-      setRecalls(data.items || []);
-      setTotal(data.total);
-      setPages(data.pages || 1);
-      if (page === 1) setStats(statsData);
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
-  };
+  const { data: stats } = useQuery({
+    queryKey: ['recalls_stats'],
+    queryFn: () => api.getRecallStats(),
+  });
 
-  useEffect(() => { fetchRecalls(); }, [page, source, classification]);
+  const recalls = pageData?.items || [];
+  const total = pageData?.total || 0;
+  const pages = pageData?.pages || 1;
 
   const handleSearch = (e) => {
     e.preventDefault();
     setPage(1);
-    fetchRecalls();
   };
 
   const classColor = (c) => {
@@ -84,7 +82,7 @@ export default function Recalls() {
 
       {/* Filters */}
       <form className="search-bar" onSubmit={handleSearch}>
-        <div className="search-input-wrapper">
+        <div className="search-input-wrapper" style={{ flex: 2 }}>
           <span className="search-icon">🔍</span>
           <input
             className="form-input"
@@ -93,13 +91,30 @@ export default function Recalls() {
             placeholder="搜尋產品描述、原因、廠商…"
           />
         </div>
-        <select className="form-select" style={{ width: 'auto', minWidth: 140 }}
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <input 
+            type="date" 
+            className="form-input" 
+            style={{ width: 'auto' }}
+            value={startDate}
+            onChange={(e) => { setStartDate(e.target.value); setPage(1); }}
+          />
+          <span style={{ color: 'var(--text-tertiary)' }}>~</span>
+          <input 
+            type="date" 
+            className="form-input" 
+            style={{ width: 'auto' }}
+            value={endDate}
+            onChange={(e) => { setEndDate(e.target.value); setPage(1); }}
+          />
+        </div>
+        <select className="form-select" style={{ width: 'auto', minWidth: 120 }}
           value={source} onChange={(e) => { setSource(e.target.value); setPage(1); }}>
           <option value="">所有來源</option>
           <option value="FDA">FDA</option>
           <option value="TFDA">TFDA</option>
         </select>
-        <select className="form-select" style={{ width: 'auto', minWidth: 140 }}
+        <select className="form-select" style={{ width: 'auto', minWidth: 120 }}
           value={classification} onChange={(e) => { setClassification(e.target.value); setPage(1); }}>
           <option value="">所有等級</option>
           <option value="Class I">Class I</option>

@@ -1,21 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { toast } from 'react-hot-toast';
 
 export default function Settings() {
-  const [crawlLogs, setCrawlLogs] = useState([]);
+  const queryClient = useQueryClient();
   const [crawling, setCrawling] = useState({});
-  const [loading, setLoading] = useState(true);
 
-  const fetchLogs = async () => {
-    try {
-      const data = await api.getCrawlLogs();
-      setCrawlLogs(data);
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
-  };
-
-  useEffect(() => { fetchLogs(); }, []);
+  const { data: crawlLogs = [], isFetching: loading } = useQuery({
+    queryKey: ['crawlLogs'],
+    queryFn: api.getCrawlLogs,
+    refetchInterval: 5000, // Poll logs frequently since they happen in the background
+  });
 
   const handleCrawl = async (name, historical = false) => {
     const key = historical ? `${name}_hist` : name;
@@ -26,8 +22,8 @@ export default function Settings() {
       console.log('Crawl triggered:', res);
       toast.success(`已在背景啟動 ${name} ${historical ? '歷史完全同步' : '更新'} 爬蟲`);
       // 延遲一下下重新抓取 Log，讓背景任務有機會寫入第一筆 Start Log
-      setTimeout(fetchLogs, 1000);
-      setTimeout(fetchLogs, 3000); // 3秒後再抓一次確認狀態
+      setTimeout(() => queryClient.invalidateQueries({ queryKey: ['crawlLogs'] }), 1000);
+      setTimeout(() => queryClient.invalidateQueries({ queryKey: ['crawlLogs'] }), 3000); // 3秒後再抓一次確認狀態
     } catch (e) { 
       console.error(e);
       toast.error(`啟動失敗: ${e.message}`);
@@ -167,19 +163,19 @@ export default function Settings() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
           <div>
             <div style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', marginBottom: 4 }}>版本</div>
-            <div style={{ fontFamily: 'var(--font-mono)' }}>v1.0.0</div>
+            <div style={{ fontFamily: 'var(--font-mono)' }}>v2.0.0</div>
           </div>
           <div>
             <div style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', marginBottom: 4 }}>後端</div>
-            <div style={{ fontFamily: 'var(--font-mono)' }}>Python FastAPI</div>
+            <div style={{ fontFamily: 'var(--font-mono)' }}>FastAPI + Celery</div>
           </div>
           <div>
             <div style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', marginBottom: 4 }}>資料庫</div>
-            <div style={{ fontFamily: 'var(--font-mono)' }}>SQLite (WAL mode)</div>
+            <div style={{ fontFamily: 'var(--font-mono)' }}>PostgreSQL & Redis</div>
           </div>
           <div>
             <div style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', marginBottom: 4 }}>排程引擎</div>
-            <div style={{ fontFamily: 'var(--font-mono)' }}>APScheduler</div>
+            <div style={{ fontFamily: 'var(--font-mono)' }}>Celery Workers</div>
           </div>
         </div>
       </div>

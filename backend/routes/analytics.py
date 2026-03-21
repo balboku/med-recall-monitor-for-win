@@ -8,7 +8,7 @@ router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 
 @router.get("/trend")
-def get_recall_trend(period: str = Query("3months", description="期間: 1month / 3months / 6months / 1year")):
+def get_recall_trend(period: str = Query("3months", description="期間: 1month / 3months / 6months / 1year / all")):
     """
     P3-2: 召回與不良事件月度趨勢（供管理審查 MRM 儀表板使用）
     """
@@ -18,8 +18,12 @@ def get_recall_trend(period: str = Query("3months", description="期間: 1month 
         "6months": 180,
         "1year": 365,
     }
-    days = period_map.get(period, 90)
-    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    
+    if period == "all":
+        since = "1900-01-01"
+    else:
+        days = period_map.get(period, 90)
+        since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
     conn = get_db()
     try:
@@ -136,24 +140,30 @@ def get_mrm_summary():
         now = datetime.now()
         this_month = now.strftime("%Y-%m")
         last_month = (now - timedelta(days=30)).strftime("%Y-%m")
+        
+        # 計算本季的所屬月份列表 (例如 Q1 = 01, 02, 03)
+        this_quarter = (now.month - 1) // 3 + 1
+        quarter_months = [f"{now.year}-{str(m).zfill(2)}" for m in range(this_quarter * 3 - 2, this_quarter * 3 + 1)]
 
-        # 本月新增召回
+        # 本月新增召回 (以 FDA 公布/召回發生日為準)
         monthly_recalls = conn.execute("""
             SELECT COUNT(*) as cnt FROM recalls
-            WHERE strftime('%Y-%m', created_at) = ?
+            WHERE strftime('%Y-%m', recall_date) = ?
         """, (this_month,)).fetchone()["cnt"]
 
-        # 本月新增事件
+        # 本月新增事件 (以 FDA 收件/發生日為準)
         monthly_events = conn.execute("""
             SELECT COUNT(*) as cnt FROM adverse_events
-            WHERE strftime('%Y-%m', created_at) = ?
+            WHERE strftime('%Y-%m', date_received) = ?
         """, (this_month,)).fetchone()["cnt"]
 
-        # Class I 召回總數
-        class1_total = conn.execute("""
+        # 本季 Class I 召回總數
+        placeholders = ','.join(['?'] * len(quarter_months))
+        class1_total = conn.execute(f"""
             SELECT COUNT(*) as cnt FROM recalls
             WHERE classification LIKE '%Class I%'
-        """).fetchone()["cnt"]
+            AND strftime('%Y-%m', recall_date) IN ({placeholders})
+        """, tuple(quarter_months)).fetchone()["cnt"]
 
         # 未讀告警數
         unread_alerts = conn.execute("""
@@ -181,7 +191,7 @@ def get_mrm_summary():
             "kpi": {
                 "new_recalls_this_month": monthly_recalls,
                 "new_events_this_month": monthly_events,
-                "class1_recalls_total": class1_total,
+                "class1_recalls_total": class1_total,  # Frontend accesses this key for '本季'
                 "unread_alerts": unread_alerts,
                 "standards_needing_update": updated_standards,
                 "reports_pending_approval": pending_reports,
