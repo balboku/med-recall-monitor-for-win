@@ -47,6 +47,7 @@ class FDAMaudeCrawler(BaseCrawler):
             "search": search_query,
             "limit": min(limit, 100),
             "skip": skip,
+            "sort": "date_received:desc"
         }
         if FDA_API_KEY:
             params["api_key"] = FDA_API_KEY

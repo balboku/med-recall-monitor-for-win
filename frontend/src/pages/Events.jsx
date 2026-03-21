@@ -8,14 +8,25 @@ export default function Events() {
   const [eventType, setEventType] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [expandedId, setExpandedId] = useState(null);
-  const [aiInsights, setAiInsights] = useState({});
+  const toggleExpand = (record) => {
+    const isExpanding = expandedId !== record.id;
+    setExpandedId(isExpanding ? record.id : null);
+    
+    // 如果正在展開，且該紀錄已有存儲的分析結果，但狀態中還沒有，則填入
+    if (isExpanding && record.ai_analysis && !aiInsights[record.id]) {
+      setAiInsights(prev => ({ ...prev, [record.id]: record.ai_analysis }));
+    }
+  };
 
   const handleAnalyzeRecord = async (type, record) => {
-    if (aiInsights[record.id] && aiInsights[record.id] !== '分析錯誤，請重試') return;
+    if (aiInsights[record.id] && !aiInsights[record.id].includes('分析錯誤')) return;
     setAiInsights(prev => ({ ...prev, [record.id]: '<div class="spinner" style="display:inline-block;width:14px;height:14px;border-width:2px;border-color:var(--primary-color) transparent transparent transparent"></div> 分析中...' }));
     try {
-      const res = await api.analyzeRecord({ record_type: type, record_id: record.id });
+      const res = await api.analyzeRecord({ 
+        record_type: type, 
+        record_id: record.id,
+        raw_data: JSON.stringify(record)
+      });
       setAiInsights(prev => ({ ...prev, [record.id]: res.html }));
     } catch {
       setAiInsights(prev => ({ ...prev, [record.id]: '<span class="text-status-error">分析錯誤，請重試</span>' }));
@@ -144,7 +155,7 @@ export default function Events() {
               <tbody>
                 {events.map((ev) => (
                   <>
-                    <tr key={ev.id} style={{ cursor: 'pointer' }} onClick={() => setExpandedId(expandedId === ev.id ? null : ev.id)}>
+                    <tr key={ev.id} style={{ cursor: 'pointer' }} onClick={() => toggleExpand(ev)}>
                       <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem' }}>
                         {ev.report_number || '—'}
                       </td>

@@ -144,12 +144,14 @@ class AIService:
     .risk-high { color: #d63031; font-weight: bold; }
     
     .capa-box { background: #fffdf0; border-right: 4px solid #f1c40f; border-left: 4px solid #f1c40f; padding: 20px; border-radius: 4px; margin: 20px 0; }
+    .sub-section { margin-top: 20px; padding-left: 15px; border-left: 2px solid #ecf0f1; }
+    .regulatory-tag { display: inline-block; background: #e74c3c; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 10px; margin-right: 5px; }
 </style>
 """
 
         prompt = f"""
-你是一位資深的醫療器材品保與法規專家 (QA/RA Expert)。
-請根據以下數據產出「深度分類統計與視覺化」執行報告。
+你是一位擁有 20 年經驗的醫療器材技術長 (CTO) 與法規事務副總 (VP of RA/QA)，精通 ISO 14971 風險管理、MDR/IVDR 法規與 21 CFR Part 803。
+請根據以下數據產出「深度專家級分類統計與視覺化」執行報告。
 
 產品名稱：{product_name}
 分析期間：{start_date} 到 {end_date}
@@ -160,47 +162,34 @@ class AIService:
 各分批原始數據摘要 (包含個別事件中的品牌與故障代碼關鍵字):
 {summaries_text}
 
-請嚴格執行以下深度分析任務：
+請嚴格執行以下深度分析任務，並產出結構化 HTML：
 
 1. **產品/品牌分類統計 (Product/Brand Analysis)**：
-   - 從分批摘要中識別並提取不同的子型號、品牌 (Brand Name) 或關鍵產品系列。
-   - 統計各品牌/型號的事件分佈。
-   - **務必確保此部分內容充實，即使資料有限也應根據現有描述進行歸納。**
+   - 使用我提供的 `brand_distribution` 數據進行深度對比。
+   - 繪製 **A) 子產品/型號統計圖**。
 
-2. **故障模式分類統計 (Failure Mode Analysis)**：
-   - 歸納 Top 5 故障類型（例如：裝置斷裂、軟體錯誤、電池失效、包裝破損等）。
-   - 計算各類型的發生次數。
+2. **故障模式深度解析 (Technical Failure Mode Deep Dive)**：
+   - 使用我提供的 `failure_modes` 數據。
+   - 繪製 **B) 故障模式排行圖**。
+   - **[新增]**：針對 Top 3 故障模式進行「技術根本原因推論」，從物理、機械或軟體邏輯角度分析。
 
 3. **視覺化圖表生成 (Embedded Charts)**：
-   - **必須產出兩組圖表**：
-     - **A) 子產品/型號統計圖 (Product Distribution Chart)**：識別並統計不同品牌或型號。
-     - **B) 故障模式排行圖 (Top Failure Modes Chart)**：依頻率排序的失效原因。
-   - 使用我提供的圖表組件 ( .chart-container, .bar-row, .bar ) 實作。
-   - 例如：
-     <div class="chart-container">
-        <div class="chart-title">子產品/型號佔比分析</div>
-        <div class="bar-row">
-            <div class="bar-label">型號 A</div>
-            <div class="bar-wrapper"><div class="bar" style="width: 70%;"></div></div>
-            <div class="bar-value">145</div>
-        </div>
-     </div>
-     <div class="chart-container">
-        <div class="chart-title">故障模式分佈排行 Top 5</div>
-        <div class="bar-row">
-            <div class="bar-label">故障名稱</div>
-            <div class="bar-wrapper"><div class="bar-red" style="width: 80%; height: 100%;"></div></div>
-            <div class="bar-value">42</div>
-        </div>
-     </div>
+   - 必須產出兩組圖表，且數據必須完全一致。
+   - 標籤與數值需清晰。
 
 4. **專業報告章節 (HTML)**：
-   - **a) 執行摘要**。
-   - **b) 分類統計圖表區**：**必須包含上述兩組圖表**。
-   - **c) ISO 14971 風險深度矩陣**。
-   - **d) CAPA 具體行動建議**。
+   - **a) 執行摘要** (ID: `section-summary`)。
+   - **b) 分類統計圖表區** (ID: `section-stats`)：包含上述兩組圖表。
+   - **c) ISO 14971 風險深度矩陣** (ID: `section-risk`)。
+   - **d) 法規影響與合規評估** (ID: `section-regulatory`)：分析對 MDR/FDA 合規性的潛在威脅。
+   - **e) CAPA 具體行動建議** (ID: `section-capa`)：包含短期(糾正)、中期(預防)、長期(設計更改)建議。
 
-請確保輸出為 JSON 物件，包含 report_html 與 stats_json（含屬性：total_recalls, total_events, top_issues, critical_warnings, fsca_recommended, max_risk_level）。全程使用繁體中文。
+要求：
+- 每個主要章節標題必須包含對應的 ID 屬性（如 <h2 id="section-summary" class="section-title">...</h2>）。
+- 內容必須極度專業、詳細且具備前瞻性建議。
+- 全程使用繁體中文。
+
+請確保輸出為 JSON 物件，包含 report_html 與 stats_json。
 """
         schema = {
             "type": "OBJECT",

@@ -84,3 +84,129 @@ def run_crawler_task(crawler_name: str, historical: bool = False):
 
     asyncio.run(_run())
     return f"Crawler {crawler_name} finished."
+
+
+@celery_app.task
+def generate_report_task(report_id: int, product_id: int, start_date: str, end_date: str, operator: str, request_ip: str):
+    """P8: 在背景執行耗時的 AI 報告生成任務"""
+    import json
+    from datetime import datetime
+    from database import get_db, write_audit_log
+    from services.ai_service import ai_service, MODEL_NAME
+    from crawlers.fda_recall import FDARecallCrawler
+    from crawlers.fda_maude import FDAMaudeCrawler
+
+    # 1. 取得產品資訊
+    conn = get_db()
+    product = conn.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
+    if not product:
+        conn.execute("UPDATE reports SET report_status='failed' WHERE id=?", (report_id,))
+        conn.commit()
+        conn.close()
+        return f"Product {product_id} not found"
+
+    product_dict = dict(product)
+    start_fmt = start_date.replace("-", "")
+    end_fmt = end_date.replace("-", "")
+
+    try:
+        # 2. 爬取最新歷史數據 (確保報告是最精準的)
+        recall_crawler = FDARecallCrawler()
+        maude_crawler = FDAMaudeCrawler()
+        
+        async def _fetch_all():
+            r = await recall_crawler.run_history(product_dict, start_fmt, end_fmt)
+            e = await maude_crawler.run_history(product_dict, start_fmt, end_fmt)
+            await recall_crawler.close()
+            await maude_crawler.close()
+            return r, e
+
+        asyncio.run(_fetch_all())
+
+        # 3. 從資料庫取出紀錄
+        recalls_rows = conn.execute("""
+            SELECT product_description, firm_name, reason, classification, recall_date FROM recalls
+            WHERE product_id = ? AND recall_date >= ? AND recall_date <= ?
+        """, (product_id, start_date, end_date)).fetchall()
+
+        events_rows = conn.execute("""
+            SELECT event_type, brand_name, manufacturer, event_description, patient_outcome, device_problem FROM adverse_events
+            WHERE product_id = ? AND date_received >= ? AND date_received <= ?
+        """, (product_id, start_date, end_date)).fetchall()
+
+        all_events = [dict(e) for e in events_rows]
+        all_recalls = [dict(r) for r in recalls_rows]
+
+        # 4. 計算統計大項
+        total_stats = {
+            "total_events": len(all_events),
+            "total_recalls": len(all_recalls),
+            "death_count": len([e for e in all_events if e.get("event_type") == "Death" or (e.get("patient_outcome") and "DEATH" in str(e.get("patient_outcome")).upper())]),
+            "injury_count": len([e for e in all_events if e.get("event_type") == "Injury" or (e.get("patient_outcome") and "INJURY" in str(e.get("patient_outcome")).upper())]),
+            "malfunction_count": len([e for e in all_events if e.get("event_type") == "Malfunction"]),
+            "brand_distribution": {},
+            "failure_modes": {}
+        }
+
+        # 統計品牌與故障模式
+        brands = {}
+        for e in all_events:
+            b = e.get("brand_name") or "Unknown"
+            brands[b] = brands.get(b, 0) + 1
+        for r in all_recalls:
+            b = r.get("firm_name") or "Unknown"
+            brands[b] = brands.get(b, 0) + 1
+        total_stats["brand_distribution"] = dict(sorted(brands.items(), key=lambda x: x[1], reverse=True)[:10])
+
+        fm = {}
+        for e in all_events:
+            p = e.get("device_problem") or "Unknown Problem"
+            p = p.split(' (')[0]
+            fm[p] = fm.get(p, 0) + 1
+        for r in all_recalls:
+            re = r.get("reason") or "Unknown Reason"
+            re = (re[:40] + '..') if len(re) > 40 else re
+            fm[re] = fm.get(re, 0) + 1
+        total_stats["failure_modes"] = dict(sorted(fm.items(), key=lambda x: x[1], reverse=True)[:10])
+
+        # 5. 分批 AI 分析 (Map-Reduce)
+        batch_size = 500
+        batch_summaries = []
+        
+        if all_recalls:
+            recall_batch_json = json.dumps(all_recalls, ensure_ascii=False)
+            batch_summaries.append(ai_service.analyze_batch(f"產品召回資料: {recall_batch_json}"))
+
+        for i in range(0, len(all_events), batch_size):
+            batch = all_events[i:i + batch_size]
+            batch_json = json.dumps(batch, ensure_ascii=False)
+            batch_summaries.append(ai_service.analyze_batch(f"不良事件批次 {i//batch_size + 1}: {batch_json}"))
+
+        # 6. 生成最終報告
+        html_report, stats_json = ai_service.generate_product_report(
+            product_dict["name"], start_date, end_date, batch_summaries, total_stats
+        )
+
+        # 7. 更新資料庫
+        total_records = len(all_events) + len(all_recalls)
+        conn.execute("""
+            UPDATE reports 
+            SET report_html=?, stats_json=?, report_status='draft', 
+                total_records_analyzed=?, model_used=?
+            WHERE id=?
+        """, (html_report, stats_json, total_records, MODEL_NAME, report_id))
+        
+        write_audit_log(conn, operator, "GENERATE_REPORT_COMPLETE", "reports",
+                        target_id=report_id, ip_address=request_ip)
+        conn.commit()
+        logger.info(f"報告 {report_id} 生成完成")
+
+    except Exception as e:
+        logger.error(f"報告 {report_id} 生成失敗: {e}")
+        conn.execute("UPDATE reports SET report_status='failed' WHERE id=?", (report_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return f"Report {report_id} generated."
+

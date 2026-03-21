@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api } from '../api';
+import { RefreshCw, Check } from 'lucide-react';
 
 export default function Header({ title, alertCount, onAlertsCleared }) {
   const [crawling, setCrawling] = useState(false);
@@ -36,15 +37,15 @@ export default function Header({ title, alertCount, onAlertsCleared }) {
           title="手動觸發所有爬蟲"
         >
           {crawling ? (
-            <><span className="spinner" style={{ width: 14, height: 14 }}></span> 爬取中...</>
+            <><RefreshCw size={14} className="spinner" /> 爬取中...</>
           ) : (
-            <>🔄 立即爬取</>
+            <><RefreshCw size={14} /> 立即爬取</>
           )}
         </button>
 
         {alertCount > 0 && (
           <button className="btn btn-ghost btn-sm" onClick={handleMarkAllRead}>
-            ✓ 全部已讀 ({alertCount})
+            <Check size={14} /> 全部已讀 ({alertCount})
           </button>
         )}
       </div>

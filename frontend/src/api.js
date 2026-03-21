@@ -49,6 +49,7 @@ export const api = {
   getReport: (id) => request(`/reports/${id}`),
   generateReport: (productId, data) => request(`/reports/generate/${productId}`, { method: 'POST', body: JSON.stringify(data) }),
   approveReport: (id, data) => request(`/reports/${id}/approve`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteReport: (id) => request(`/reports/${id}`, { method: 'DELETE' }),
   analyzeRecord: (data) => request('/reports/analyze-record', { method: 'POST', body: JSON.stringify(data) }),
 
   // P3-2: 分析與趨勢

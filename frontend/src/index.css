@@ -1,52 +1,47 @@
-/* ============================================
-   MedWatch Design System — OLED Dark Theme
-   ============================================ */
+@import url('https://fonts.googleapis.com/css2?family=Figtree:wght@300;400;500;600;700&family=Noto+Sans+TC:wght@300;400;500;700&display=swap');
 
 :root {
-  /* --- Color Palette --- */
-  --bg-primary: #000000;
-  --bg-secondary: #0a0a0f;
-  --bg-surface: #111118;
-  --bg-elevated: #1a1a24;
-  --bg-hover: #222230;
+  /* --- Color Palette (Medical Professional) --- */
+  --bg-primary: #020617; /* Slate-950 */
+  --bg-secondary: #0f172a; /* Slate-900 */
+  --bg-surface: #1e293b; /* Slate-800 */
+  --bg-elevated: #334155; /* Slate-700 */
+  --bg-hover: #475569; /* Slate-600 */
 
-  --glass-bg: rgba(18, 18, 28, 0.72);
-  --glass-border: rgba(255, 255, 255, 0.06);
-  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --glass-bg: rgba(15, 23, 42, 0.8);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
 
-  --text-primary: #f0f0f5;
-  --text-secondary: #9898ab;
-  --text-tertiary: #5e5e72;
-  --text-inverse: #000000;
+  --text-primary: #f8fafc; /* Slate-50 */
+  --text-secondary: #cbd5e1; /* Slate-300 */
+  --text-tertiary: #94a3b8; /* Slate-400 */
+  --text-inverse: #020617;
 
-  --accent-blue: #3b82f6;
-  --accent-blue-glow: rgba(59, 130, 246, 0.15);
-  --accent-purple: #8b5cf6;
-  --accent-purple-glow: rgba(139, 92, 246, 0.15);
-  --accent-cyan: #06b6d4;
-  --accent-cyan-glow: rgba(6, 182, 212, 0.15);
-  --accent-green: #10b981;
-  --accent-green-glow: rgba(16, 185, 129, 0.15);
-  --accent-amber: #f59e0b;
-  --accent-amber-glow: rgba(245, 158, 11, 0.15);
-  --accent-red: #ef4444;
-  --accent-red-glow: rgba(239, 68, 68, 0.15);
-  --accent-pink: #ec4899;
+  --accent-blue: #0066FF; /* Professional Medical Blue */
+  --accent-blue-glow: rgba(0, 102, 255, 0.15);
+  --accent-info: #0ea5e9; /* Sky-500 */
+  --accent-info-glow: rgba(14, 165, 233, 0.15);
+  --accent-success: #10b981; /* Emerald-500 */
+  --accent-success-glow: rgba(16, 185, 129, 0.15);
+  --accent-warning: #f59e0b; /* Amber-500 */
+  --accent-warning-glow: rgba(245, 158, 11, 0.15);
+  --accent-danger: #ef4444; /* Red-500 */
+  --accent-danger-glow: rgba(239, 68, 68, 0.15);
 
-  --gradient-primary: linear-gradient(135deg, #3b82f6, #8b5cf6);
-  --gradient-surface: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 100%);
+  --gradient-primary: linear-gradient(135deg, #0066FF, #0ea5e9);
+  --gradient-surface: linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0) 100%);
 
-  /* --- Spacing --- */
-  --sidebar-width: 260px;
-  --header-height: 64px;
+  /* --- Spacing & Radius --- */
+  --sidebar-width: 280px;
+  --header-height: 72px;
   --radius-sm: 8px;
   --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
+  --radius-lg: 20px;
+  --radius-xl: 24px;
 
   /* --- Typography --- */
-  --font-sans: 'Inter', 'Noto Sans TC', -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --font-sans: 'Figtree', 'Noto Sans TC', -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
 
   /* --- Transitions --- */
   --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);

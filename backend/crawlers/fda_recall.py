@@ -46,6 +46,7 @@ class FDARecallCrawler(BaseCrawler):
             "search": search_query,
             "limit": min(limit, 100),
             "skip": skip,
+            "sort": "recall_initiation_date:desc"
         }
         if FDA_API_KEY:
             params["api_key"] = FDA_API_KEY

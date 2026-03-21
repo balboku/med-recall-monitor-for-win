@@ -2,6 +2,18 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { toast } from 'react-hot-toast';
+import { 
+  Plus, 
+  Edit2, 
+  Trash2, 
+  Globe, 
+  CheckCircle, 
+  RotateCcw, 
+  X,
+  Info,
+  AlertCircle,
+  ExternalLink
+} from 'lucide-react';
 
 const emptyForm = { standard_number: '', title: '', current_version: '', source_url: '', notes: '' };
 
@@ -60,7 +72,12 @@ export default function Standards() {
   };
 
   if (loading) {
-    return <div className="loading-overlay"><div className="spinner"></div><span>載入中…</span></div>;
+    return (
+      <div className="loading-overlay">
+        <div className="spinner"></div>
+        <span>正在同步全球標準數據庫...</span>
+      </div>
+    );
   }
 
   const withUpdates = standards.filter((s) => s.has_update);
@@ -71,97 +88,114 @@ export default function Standards() {
       <div className="section-title">
         <div>
           <h1 className="page-title">法規標準追蹤</h1>
-          <p className="page-subtitle">追蹤 IEC/ISO 等相關法規標準的最新版本</p>
+          <p className="page-subtitle">實時監控 IEC、ISO 及各國醫療器材技術標準的修訂進度</p>
         </div>
-        <button className="btn btn-primary" onClick={openNew}>＋ 新增標準</button>
+        <button className="btn btn-primary" onClick={openNew}>
+          <Plus size={18} /> 新增追蹤標準
+        </button>
       </div>
 
       {standards.length === 0 ? (
-        <div className="glass-card">
+        <div className="glass-card" style={{ padding: '80px 40px' }}>
           <div className="empty-state">
-            <div className="empty-state-icon">📋</div>
-            <h3>尚未追蹤任何標準</h3>
-            <p>新增您關注的法規標準（如 IEC 60601-1、ISO 13485），系統會自動檢查版本更新</p>
-            <button className="btn btn-primary" onClick={openNew}>＋ 新增標準</button>
+            <div className="empty-state-icon">
+              <Globe size={64} style={{ color: 'var(--accent-info)', opacity: 0.6 }} />
+            </div>
+            <h3>目前無追蹤項目</h3>
+            <p>添加如 IEC 60601、ISO 13485 等關鍵標準，系統將自動偵測官方發布的新版本</p>
+            <button className="btn btn-primary" onClick={openNew} style={{ marginTop: '12px' }}>
+              <Plus size={18} /> 開始追蹤標準
+            </button>
           </div>
         </div>
       ) : (
-        <>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
           {/* With updates section */}
           {withUpdates.length > 0 && (
-            <div style={{ marginBottom: 24 }}>
-              <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: 12, color: 'var(--accent-cyan)' }}>
-                🔄 有版本更新 ({withUpdates.length})
-              </h3>
-              <div style={{ display: 'grid', gap: 12 }}>
+            <section>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+                <RotateCcw size={20} style={{ color: 'var(--accent-warning)' }} />
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--accent-warning)' }}>
+                  發現版本更新 ({withUpdates.length})
+                </h3>
+              </div>
+              <div style={{ display: 'grid', gap: '16px' }}>
                 {withUpdates.map((s) => (
                   <StandardCard key={s.id} standard={s} onEdit={openEdit} onDelete={handleDelete} highlight />
                 ))}
               </div>
-            </div>
+            </section>
           )}
 
           {/* No updates section */}
-          <div>
-            {withUpdates.length > 0 && (
-              <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: 12, color: 'var(--text-secondary)' }}>
-                ✅ 版本最新 ({noUpdates.length})
+          <section>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+              <CheckCircle size={20} style={{ color: 'var(--accent-success)' }} />
+              <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                版本已是最新 ({noUpdates.length})
               </h3>
-            )}
-            <div style={{ display: 'grid', gap: 12 }}>
+            </div>
+            <div style={{ display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(auto-fill, minmax(450px, 1fr))' }}>
               {noUpdates.map((s) => (
                 <StandardCard key={s.id} standard={s} onEdit={openEdit} onDelete={handleDelete} />
               ))}
             </div>
-          </div>
-        </>
+          </section>
+        </div>
       )}
 
       {/* Modal */}
       {showModal && (
         <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && setShowModal(false)}>
-          <div className="modal">
+          <div className="modal" style={{ maxWidth: '600px' }}>
             <div className="modal-header">
-              <h2>{editing ? '編輯標準' : '新增追蹤標準'}</h2>
-              <button className="btn btn-ghost btn-sm" onClick={() => setShowModal(false)}>✕</button>
+              <h2 style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                {editing ? <Edit2 size={20} /> : <Plus size={20} />}
+                {editing ? '編輯標準資訊' : '新增追蹤標準'}
+              </h2>
+              <button className="btn btn-ghost btn-sm" onClick={() => setShowModal(false)}>
+                <X size={20} />
+              </button>
             </div>
             <div className="modal-body">
               <div className="form-group">
-                <label className="form-label">標準編號 *</label>
+                <label className="form-label">標準編號 <span style={{ color: 'var(--accent-danger)' }}>*</span></label>
                 <input className="form-input" value={form.standard_number}
                   onChange={(e) => setForm({ ...form, standard_number: e.target.value })}
-                  placeholder="例：IEC 60601-1" />
+                  placeholder="例：IEC 60601-1" autoFocus />
               </div>
               <div className="form-group">
-                <label className="form-label">標準名稱 *</label>
+                <label className="form-label">完整標題 <span style={{ color: 'var(--accent-danger)' }}>*</span></label>
                 <input className="form-input" value={form.title}
                   onChange={(e) => setForm({ ...form, title: e.target.value })}
                   placeholder="例：Medical electrical equipment - General requirements" />
               </div>
-              <div className="form-group">
-                <label className="form-label">目前已知版本</label>
-                <input className="form-input" value={form.current_version}
-                  onChange={(e) => setForm({ ...form, current_version: e.target.value })}
-                  placeholder="例：Edition 3.2 (2020)" />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                <div className="form-group">
+                  <label className="form-label">目前使用版本</label>
+                  <input className="form-input" value={form.current_version}
+                    onChange={(e) => setForm({ ...form, current_version: e.target.value })}
+                    placeholder="例：Edition 3.2" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">官方來源網址</label>
+                  <input className="form-input" value={form.source_url}
+                    onChange={(e) => setForm({ ...form, source_url: e.target.value })}
+                    placeholder="IEC/ISO 官網頁面" />
+                </div>
               </div>
               <div className="form-group">
-                <label className="form-label">來源網址</label>
-                <input className="form-input" value={form.source_url}
-                  onChange={(e) => setForm({ ...form, source_url: e.target.value })}
-                  placeholder="IEC/ISO 標準頁面網址" />
-              </div>
-              <div className="form-group">
-                <label className="form-label">備註</label>
+                <label className="form-label">內部備註 / 應用範圍</label>
                 <textarea className="form-textarea" value={form.notes}
                   onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                  placeholder="相關備註" />
+                  placeholder="紀錄此標準與產品開發的關聯性..." style={{ minHeight: '100px' }} />
               </div>
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setShowModal(false)}>取消</button>
               <button className="btn btn-primary" onClick={handleSave}
-                disabled={!form.standard_number.trim() || !form.title.trim()}>
-                {editing ? '儲存變更' : '新增標準'}
+                disabled={!form.standard_number.trim() || !form.title.trim() || mutation.isPending}>
+                {mutation.isPending ? '提交中...' : (editing ? '儲存變更' : '加入追蹤清單')}
               </button>
             </div>
           </div>
@@ -174,48 +208,84 @@ export default function Standards() {
 function StandardCard({ standard: s, onEdit, onDelete, highlight }) {
   return (
     <div className="glass-card" style={{
-      display: 'flex', alignItems: 'center', gap: 20,
-      ...(highlight ? { borderColor: 'rgba(6,182,212,0.3)', boxShadow: '0 0 20px rgba(6,182,212,0.08)' } : {}),
+      display: 'flex', 
+      flexDirection: 'column',
+      padding: '20px',
+      borderLeft: highlight ? '4px solid var(--accent-warning)' : '1px solid var(--glass-border)',
+      background: highlight ? 'rgba(245, 158, 11, 0.03)' : 'var(--glass-bg)',
+      transition: 'all var(--transition-normal)'
     }}>
-      <div style={{ flex: 1 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <span style={{
-            fontFamily: 'var(--font-mono)', fontSize: '0.95rem', fontWeight: 700,
-            color: highlight ? 'var(--accent-cyan)' : 'var(--text-primary)',
+            fontFamily: 'var(--font-mono)', fontSize: '1rem', fontWeight: 700,
+            color: 'var(--text-primary)',
           }}>
             {s.standard_number}
           </span>
           {s.has_update ? (
-            <span className="tag tag-cyan">有更新</span>
+            <span className="tag tag-amber" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <RotateCcw size={12} /> 有新版本
+            </span>
           ) : (
-            <span className="tag tag-green">最新</span>
+            <span className="tag tag-green" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <CheckCircle size={12} /> 最新
+            </span>
           )}
-          <span className={`tag tag-${s.status === 'active' ? 'green' : 'amber'}`} style={{ opacity: 0.7 }}>
-            {s.status || 'active'}
+        </div>
+        <div style={{ display: 'flex', gap: '4px' }}>
+          {s.source_url && (
+            <a href={s.source_url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm" title="查看官方文件">
+              <ExternalLink size={16} />
+            </a>
+          )}
+          <button className="btn btn-ghost btn-sm" onClick={() => onEdit(s)} title="編輯">
+            <Edit2 size={16} />
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={() => onDelete(s.id)} style={{ color: 'var(--accent-danger)' }} title="刪除">
+            <Trash2 size={16} />
+          </button>
+        </div>
+      </div>
+
+      <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '16px', fontWeight: 500 }}>
+        {s.title}
+      </div>
+
+      <div style={{ 
+        marginTop: 'auto',
+        display: 'grid', 
+        gridTemplateColumns: '1fr 1fr', 
+        gap: '12px', 
+        fontSize: '0.8rem', 
+        padding: '12px',
+        background: 'rgba(255,255,255,0.02)',
+        borderRadius: '8px',
+        border: '1px solid var(--glass-border)'
+      }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <span style={{ color: 'var(--text-tertiary)', fontWeight: 600 }}>當前版本</span>
+          <span style={{ color: 'var(--text-primary)' }}>{s.current_version || '未註記'}</span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <span style={{ color: 'var(--text-tertiary)', fontWeight: 600 }}>最新同步版本</span>
+          <span style={{ color: s.has_update ? 'var(--accent-warning)' : 'var(--text-primary)', fontWeight: s.has_update ? 700 : 400 }}>
+            {s.latest_version || (s.has_update ? '檢測到更新' : (s.current_version || '同步中'))}
           </span>
         </div>
-        <div style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', marginBottom: 6 }}>
-          {s.title}
-        </div>
-        <div style={{ display: 'flex', gap: 20, fontSize: '0.78rem', color: 'var(--text-tertiary)' }}>
-          {s.current_version && <span>已知版本：{s.current_version}</span>}
-          {s.latest_version && s.latest_version !== s.current_version && (
-            <span style={{ color: 'var(--accent-cyan)', fontWeight: 600 }}>最新版本：{s.latest_version}</span>
-          )}
-          {s.last_checked && <span>上次檢查：{new Date(s.last_checked).toLocaleDateString('zh-TW')}</span>}
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <Info size={12} />
+          <span>上次檢查：{s.last_checked ? new Date(s.last_checked).toLocaleDateString('zh-TW', { year: 'numeric', month: 'long', day: 'numeric' }) : '尚未檢查'}</span>
         </div>
         {s.notes && (
-          <div style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', marginTop: 4, fontStyle: 'italic' }}>
-            {s.notes}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', maxWidth: '50%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <AlertCircle size={12} />
+            <span>{s.notes}</span>
           </div>
         )}
-      </div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        {s.source_url && (
-          <a href={s.source_url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm">🔗</a>
-        )}
-        <button className="btn btn-ghost btn-sm" onClick={() => onEdit(s)}>✏️</button>
-        <button className="btn btn-ghost btn-sm" onClick={() => onDelete(s.id)} style={{ color: 'var(--accent-red)' }}>🗑️</button>
       </div>
     </div>
   );

@@ -1,23 +1,35 @@
 import { NavLink } from 'react-router-dom';
+import { 
+  LayoutDashboard, 
+  Bell, 
+  AlertTriangle, 
+  ClipboardList, 
+  Sparkles, 
+  Search, 
+  Settings,
+  Activity
+} from 'lucide-react';
 
 const navItems = [
   { section: '監控總覽' },
-  { path: '/', icon: '📊', label: 'Dashboard' },
+  { path: '/', icon: <LayoutDashboard size={18} />, label: 'Dashboard' },
   { section: '資料查詢' },
-  { path: '/recalls', icon: '🔔', label: '召回記錄' },
-  { path: '/events', icon: '⚠️', label: '不良事件' },
-  { path: '/standards', icon: '📋', label: '法規標準' },
-  { path: '/reports', icon: '✨', label: 'AI 分析報告' },
+  { path: '/recalls', icon: <Bell size={18} />, label: '召回記錄' },
+  { path: '/events', icon: <AlertTriangle size={18} />, label: '不良事件' },
+  { path: '/standards', icon: <ClipboardList size={18} />, label: '法規標準' },
+  { path: '/reports', icon: <Sparkles size={18} />, label: 'AI 分析報告' },
   { section: '系統管理' },
-  { path: '/products', icon: '🔍', label: '產品監控管理' },
-  { path: '/settings', icon: '⚙️', label: '系統設定' },
+  { path: '/products', icon: <Search size={18} />, label: '產品監控管理' },
+  { path: '/settings', icon: <Settings size={18} />, label: '系統設定' },
 ];
 
 export default function Sidebar({ alertCount }) {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <div className="sidebar-brand-icon">🏥</div>
+        <div className="sidebar-brand-icon">
+          <Activity size={24} color="white" />
+        </div>
         <div>
           <h1>MedWatch</h1>
           <span>醫療器材監控系統</span>
@@ -46,12 +58,16 @@ export default function Sidebar({ alertCount }) {
       </nav>
 
       <div style={{
-        padding: '16px 20px',
+        padding: '20px 24px',
         borderTop: '1px solid var(--glass-border)',
-        fontSize: '0.7rem',
+        fontSize: '0.75rem',
         color: 'var(--text-tertiary)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px'
       }}>
-        MedWatch v1.0.0
+        <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--accent-success)' }}></div>
+        MedWatch v1.1.0 — System Active
       </div>
     </aside>
   );

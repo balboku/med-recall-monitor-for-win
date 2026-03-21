@@ -40,9 +40,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://medwatch_user:medwatch_password@postgres:5432/medwatch
+      # - DATABASE_URL=postgresql://medwatch_user:medwatch_password@postgres:5432/medwatch
       - REDIS_URL=redis://redis:6379/0
-      - ALLOWED_ORIGINS=http://localhost,http://localhost:5173
+      - ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
       - PYTHONPATH=/app
     env_file:
       - ./backend/.env
@@ -53,7 +53,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     restart: unless-stopped
 
   celery_worker:
@@ -61,7 +61,7 @@ services:
       context: ./backend
     container_name: medwatch_worker
     environment:
-      - DATABASE_URL=postgresql://medwatch_user:medwatch_password@postgres:5432/medwatch
+      # - DATABASE_URL=postgresql://medwatch_user:medwatch_password@postgres:5432/medwatch
       - REDIS_URL=redis://redis:6379/0
       - PYTHONPATH=/app
     env_file:
@@ -73,17 +73,22 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: celery -A celery_app worker --loglevel=info
+    command: watchmedo auto-restart --directory=./ --pattern="*.py" --recursive -- celery -A celery_app worker --loglevel=info
     restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
+      target: dev
     container_name: medwatch_frontend
     ports:
-      - "80:80"
+      - "5173:5173"
     depends_on:
       - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev -- --host 0.0.0.0
     restart: unless-stopped
 
   prometheus:

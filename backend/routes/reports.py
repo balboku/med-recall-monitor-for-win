@@ -20,7 +20,7 @@ class GenerateReportRequest(BaseModel):
 
 class AnalyzeRecordRequest(BaseModel):
     record_type: str  # "recall" or "event"
-    raw_data: str
+    raw_data: Optional[str] = None
     record_id: Optional[int] = None
 
 
@@ -61,9 +61,12 @@ def get_reports():
 def get_report(report_id: int):
     conn = get_db()
     cursor = conn.cursor()
-    report = cursor.execute(
-        "SELECT * FROM reports WHERE id = ?", (report_id,)
-    ).fetchone()
+    report = cursor.execute("""
+        SELECT r.*, p.name as product_name
+        FROM reports r
+        JOIN products p ON r.product_id = p.id
+        WHERE r.id = ?
+    """, (report_id,)).fetchone()
     conn.close()
 
     if not report:
@@ -74,8 +77,7 @@ def get_report(report_id: int):
         try:
             row["stats_json"] = json.loads(row["stats_json"])
         except Exception:
-            pass
-
+            row["stats_json"] = {}
     return row
 
 
@@ -87,114 +89,38 @@ def generate_report(product_id: int, req: GenerateReportRequest, request: Reques
         conn.close()
         raise HTTPException(status_code=404, detail="Product not found")
 
-    product_dict = dict(product)
-
-    # Format dates to YYYYMMDD for openFDA
-    start_fmt = req.start_date.replace("-", "")
-    end_fmt = req.end_date.replace("-", "")
-
-    recall_crawler = FDARecallCrawler()
-    maude_crawler = FDAMaudeCrawler()
-
-    try:
-        # P1-3: 追蹤是否發生資料截斷
-        import asyncio
-        recalls_data = asyncio.run(recall_crawler.run_history(product_dict, start_fmt, end_fmt))
-        events_data = asyncio.run(maude_crawler.run_history(product_dict, start_fmt, end_fmt))
-    except Exception as e:
-        conn.close()
-        raise HTTPException(status_code=500, detail=f"Failed to fetch history: {str(e)}")
-
-    total_records = recalls_data + events_data
-
-    # 從資料庫取出這個產品在日期範圍內的紀錄
-    recalls_rows = conn.execute("""
-        SELECT product_description, firm_name, reason, classification, recall_date FROM recalls
-        WHERE product_id = ? AND recall_date >= ? AND recall_date <= ?
-    """, (product_id, req.start_date, req.end_date)).fetchall()
-
-    events_rows = conn.execute("""
-        SELECT event_type, brand_name, manufacturer, event_description, patient_outcome FROM adverse_events
-        WHERE product_id = ? AND date_received >= ? AND date_received <= ?
-    """, (product_id, req.start_date, req.end_date)).fetchall()
-
-    # --- 大數據分批處理邏輯 (Batch Analysis / Map-Reduce) ---
-    all_events = [dict(e) for e in events_rows]
-    all_recalls = [dict(r) for r in recalls_rows]
-    
-    # 1. 準備統計大項 (為 Reduce 階段提供真實基準)
-    total_stats = {
-        "total_events": len(all_events),
-        "total_recalls": len(all_recalls),
-        "death_count": len([e for e in all_events if e.get("event_type") == "Death" or (e.get("patient_outcome") and "DEATH" in str(e.get("patient_outcome")).upper())]),
-        "injury_count": len([e for e in all_events if e.get("event_type") == "Injury" or (e.get("patient_outcome") and "INJURY" in str(e.get("patient_outcome")).upper())]),
-        "malfunction_count": len([e for e in all_events if e.get("event_type") == "Malfunction"])
-    }
-
-    # 2. 分批進行 Map 分析 (每 500 筆一組)
-    batch_size = 500
-    batch_summaries = []
-    
-    # 處理召回 (通常數量較少，視為一個單獨批次)
-    if all_recalls:
-        recall_batch_json = json.dumps(all_recalls, ensure_ascii=False)
-        batch_summaries.append(ai_service.analyze_batch(f"產品召回資料: {recall_batch_json}"))
-
-    # 處理不良事件 (分批)
-    for i in range(0, len(all_events), batch_size):
-        batch = all_events[i:i + batch_size]
-        batch_json = json.dumps(batch, ensure_ascii=False)
-        # 呼叫 AI 進行該批次摘要
-        batch_summaries.append(ai_service.analyze_batch(f"不良事件批次 {i//batch_size + 1}: {batch_json}"))
-
-    # 3. Reduce 階段：產出最終摘要報告
-    html_report, stats_json = ai_service.generate_product_report(
-        product_dict["name"], req.start_date, req.end_date, batch_summaries, total_stats
-    )
-
-    data_truncated = 0 # 已經分批處理，理論上不再有截斷問題
-    total_records = len(all_events) + len(all_recalls)
-
-
     operator = req.operator or "system"
     ip = request.client.host if request.client else None
 
-    # P1-3: 報告初始狀態為 draft
-    from services.ai_service import MODEL_NAME
+    # 1. 建立初始報告紀錄，狀態為 'generating'
     cursor = conn.execute("""
-        INSERT INTO reports (product_id, start_date, end_date, report_html, stats_json,
-                             model_used, report_status, generated_by,
-                             data_truncated, total_records_analyzed)
-        VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
-    """, (product_id, req.start_date, req.end_date, html_report, stats_json,
-          MODEL_NAME, operator, data_truncated, total_records))
+        INSERT INTO reports (product_id, start_date, end_date, report_html, report_status, generated_by)
+        VALUES (?, ?, ?, '', 'generating', ?)
+    """, (product_id, req.start_date, req.end_date, operator))
     conn.commit()
     new_id = cursor.lastrowid
 
-    # P1-2: 寫入稽核日誌
-    write_audit_log(conn, operator, "CREATE_REPORT", "reports",
+    # 2. 寫入初始稽核日誌
+    write_audit_log(conn, operator, "CREATE_REPORT_ASYNC", "reports",
                     target_id=new_id, ip_address=ip)
     conn.commit()
     conn.close()
 
-    stats_dict = {}
-    try:
-        stats_dict = json.loads(stats_json)
-    except Exception:
-        pass
+    # 3. 呼叫 Celery 任務進行背景分析
+    from celery_app import generate_report_task
+    generate_report_task.delay(
+        new_id, product_id, req.start_date, req.end_date, operator, ip
+    )
 
     return {
         "id": new_id,
         "product_id": product_id,
         "start_date": req.start_date,
         "end_date": req.end_date,
-        "report_html": html_report,
-        "stats_json": stats_dict,
-        "report_status": "draft",
-        "generated_by": operator,
-        "data_truncated": data_truncated,
-        "total_records_analyzed": total_records,
+        "report_status": "generating",
+        "message": "報告生成任務已啟動，請在稍後查看結果。"
     }
+
 
 
 @router.put("/{report_id}/approve")
@@ -252,7 +178,25 @@ def get_audit_log(limit: int = 50):
 @router.post("/analyze-record")
 def analyze_record(req: AnalyzeRecordRequest):
     """單筆紀錄 AI 解析，存入資料表避免重複耗費額度"""
-    html_insight = ai_service.analyze_single_record(req.record_type, req.raw_data)
+    raw_data = req.raw_data
+    
+    # 若前端沒傳原始資料但有 ID，我們自己從資料庫撈
+    if not raw_data and req.record_id:
+        conn = get_db()
+        try:
+            table = "recalls" if req.record_type == "recall" else "adverse_events"
+            row = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (req.record_id,)).fetchone()
+            if row:
+                d = dict(row)
+                d.pop('ai_analysis', None) # 避免遞迴包含舊分析
+                raw_data = json.dumps(d, ensure_ascii=False)
+        finally:
+            conn.close()
+
+    if not raw_data:
+        raise HTTPException(status_code=400, detail="無法獲取分析所需的原始資料")
+
+    html_insight = ai_service.analyze_single_record(req.record_type, raw_data)
 
     if req.record_id:
         table_name = "recalls" if req.record_type == "recall" else "adverse_events"
@@ -261,9 +205,29 @@ def analyze_record(req: AnalyzeRecordRequest):
             conn.execute(f"UPDATE {table_name} SET ai_analysis = ? WHERE id = ?",
                          (html_insight, req.record_id))
             conn.commit()
-        except Exception:
-            pass  # ai_analysis 欄位可能尚未存在，忽略
+        except Exception as e:
+            print(f"⚠️ 更新 ai_analysis 失敗: {e}")
         finally:
             conn.close()
 
     return {"html": html_insight}
+
+
+@router.delete("/{report_id}")
+def delete_report(report_id: int, request: Request, operator: Optional[str] = "system"):
+    """P9: 刪除報告"""
+    conn = get_db()
+    try:
+        report = conn.execute("SELECT id FROM reports WHERE id = ?", (report_id,)).fetchone()
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+
+        ip = request.client.host if request.client else None
+        
+        conn.execute("DELETE FROM reports WHERE id = ?", (report_id,))
+        write_audit_log(conn, operator, "DELETE_REPORT", "reports",
+                        target_id=report_id, ip_address=ip)
+        conn.commit()
+    finally:
+        conn.close()
+    return {"id": report_id, "status": "deleted"}

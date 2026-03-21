@@ -30,27 +30,35 @@ class PgCursorWrapper:
 
     def _convert_query(self, query):
         import re
-        # 簡易的 ? 轉 %s 的替換
+        # 處理 PostgreSQL 的 %s 參數替換與 % 轉義
+        # 1. 將 SQLite 的 ? 替換為 %s
         query = query.replace("?", "%s")
-        # SQLite LIKE 預設不分大小寫，PostgreSQL 需轉為 ILIKE
-        query = re.sub(r"(?i)\bLIKE\b", "ILIKE", query)
-        
-        # SQLite strftime('%Y-%m', col) -> PostgreSQL TO_CHAR(col, 'YYYY-MM')
-        def _repl_strftime(match):
-            fmt = match.group(1)
-            col = match.group(2)
-            pg_fmt = fmt.replace('%Y', 'YYYY').replace('%m', 'MM').replace('%d', 'DD')
-            return f"TO_CHAR({col}, '{pg_fmt}')"
-        query = re.sub(r"strftime\('([^']+)',\s*([^)]+)\)", _repl_strftime, query)
-        
+        # 2. 轉義 SQL 中的 % 為 %% (因為 psycopg2 會解析 %)
+        # 我們只在 query 中有 %s 時才需要轉義，但為了保險統一處理
+        # 注意：我們不能直接 replace("%", "%%")，因為那會把剛剛產生的 %s 變成 %%s
+        # 理想做法是先轉義原有 %，再換 ? -> %s
         return query
 
     def execute(self, query, params=None):
-        query = self._convert_query(query)
-        # PostgreSQL doesn't like datetime() without type cast if used like sqlite, but mostly we use standard SQL.
-        # SQLite's datetime('now', '-7 days') -> not natively compatible with Postgres
-        # We need a small hack to replace sqlite's datetime('now', '-X days') with Postgres' NOW() - INTERVAL 'X days'
         import re
+        # 重新實作更穩健的轉換邏輯
+        # A. 先將原有的 % 轉義為 %%
+        query = query.replace("%", "%%")
+        # B. 將 ? 轉換為 %s
+        query = query.replace("?", "%s")
+        
+        # C. SQLite LIKE 預設不分大小寫，PostgreSQL 需轉為 ILIKE
+        query = re.sub(r"(?i)\bLIKE\b", "ILIKE", query)
+        
+        # D. SQLite strftime('%Y-%m', col) -> PostgreSQL TO_CHAR(CAST(NULLIF(col, '') AS DATE), 'YYYY-MM')
+        def _repl_strftime(match):
+            fmt = match.group(1).replace("%%", "%") # 還原格式符中的 %
+            col = match.group(2)
+            pg_fmt = fmt.replace('%Y', 'YYYY').replace('%m', 'MM').replace('%d', 'DD')
+            return f"TO_CHAR(CAST(NULLIF({col}, '') AS DATE), '{pg_fmt}')"
+        query = re.sub(r"strftime\('([^']+)',\s*([^)]+)\)", _repl_strftime, query)
+        
+        # E. SQLite datetime('now', '-7 days') -> Postgres NOW() - INTERVAL '7 days'
         query = re.sub(r"datetime\('now',\s*'-(\d+)\s+days'\)", r"NOW() - INTERVAL '\1 days'", query)
         
         if params is not None:
@@ -172,6 +180,7 @@ def init_db():
             termination_date TEXT,
             url TEXT,
             raw_data TEXT,
+            ai_analysis TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL
         )
@@ -191,6 +200,7 @@ def init_db():
             event_description TEXT,
             patient_outcome TEXT,
             raw_data TEXT,
+            ai_analysis TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL
         )
@@ -239,7 +249,7 @@ def init_db():
             product_id INTEGER NOT NULL,
             start_date TEXT,
             end_date TEXT,
-            report_html TEXT NOT NULL,
+            report_html TEXT NOT NULL DEFAULT '',
             stats_json TEXT,
             model_used TEXT,
             report_status TEXT NOT NULL DEFAULT 'draft',
@@ -316,6 +326,7 @@ def migrate_db():
         ("ALTER TABLE alerts ADD COLUMN capa_ref TEXT",),
         ("ALTER TABLE alerts ADD COLUMN sop_ref TEXT",),
         ("ALTER TABLE reports ADD COLUMN report_status TEXT NOT NULL DEFAULT 'draft'",),
+        ("ALTER TABLE reports ADD COLUMN report_html TEXT NOT NULL DEFAULT ''",),
         ("ALTER TABLE reports ADD COLUMN generated_by TEXT",),
         ("ALTER TABLE reports ADD COLUMN approved_by TEXT",),
         ("ALTER TABLE reports ADD COLUMN approved_at TIMESTAMP",),
@@ -324,6 +335,8 @@ def migrate_db():
         ("ALTER TABLE reports ADD COLUMN total_records_analyzed INTEGER NOT NULL DEFAULT 0",),
         ("ALTER TABLE recalls ADD COLUMN capa_ref TEXT",),
         ("ALTER TABLE recalls ADD COLUMN capa_status TEXT",),
+        ("ALTER TABLE recalls ADD COLUMN ai_analysis TEXT",),
+        ("ALTER TABLE adverse_events ADD COLUMN ai_analysis TEXT",),
     ]
 
     migrated = 0
