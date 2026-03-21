@@ -155,9 +155,44 @@ export default function Reports() {
               
               {/* HTML 報告內容 */}
               <div className="card min-h-[500px]">
-                <h3 className="text-lg font-medium text-text-primary mb-4 border-b border-border-color pb-2">
-                   專家分析報告
-                </h3>
+                <div className="flex justify-between items-center mb-4 border-b border-border-color pb-2">
+                  <h3 className="text-lg font-medium text-text-primary">
+                     專家分析報告
+                  </h3>
+                  <span className="text-xs font-medium px-2 py-1 bg-primary-500/20 text-primary-400 rounded uppercase tracking-wide">
+                    ✨ AI Executive Summary
+                  </span>
+                </div>
+                
+                <style>{`
+                  .ai-report-content h1:first-of-type,
+                  .ai-report-content h2:first-of-type,
+                  .ai-report-content h3:first-of-type {
+                    color: var(--color-primary-400);
+                    font-size: 1.25rem;
+                    margin-bottom: 0.75rem;
+                  }
+                  .ai-report-content blockquote:first-of-type,
+                  .ai-report-content p:first-of-type {
+                    font-size: 1.05rem;
+                    line-height: 1.6;
+                    color: var(--color-text-primary);
+                    padding: 1rem 1.25rem;
+                    background-color: rgba(59, 130, 246, 0.1); 
+                    border-left: 4px solid var(--color-primary-500);
+                    border-radius: 0 0.5rem 0.5rem 0;
+                    margin-bottom: 2rem;
+                    font-weight: 500;
+                  }
+                  .ai-report-content ul {
+                    margin-top: 0.5rem;
+                    margin-bottom: 1rem;
+                  }
+                  .ai-report-content li {
+                    margin-bottom: 0.25rem;
+                  }
+                `}</style>
+
                 <div 
                   className="prose prose-invert prose-blue max-w-none ai-report-content text-sm leading-relaxed"
                   dangerouslySetInnerHTML={{ __html: activeReport.report_html }}
