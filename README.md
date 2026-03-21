@@ -1,46 +1,46 @@
-# MedWatch (醫療器材召回監控系統)
+# MedWatch (醫療器材召回與進階監控系統 v2)
 
-這是一個專為醫療器材品保工程師開發的監控系統，旨在追蹤 FDA 召回記錄、FDA MAUDE 不良事件、TFDA 警訊以及國際標準 (IEC/ISO) 的最新版本。
+這是一個專為醫療器材品保工程師開發的高性能監控與分析系統。v2 版本已完成全面架構優化，包含資料庫遷移、背景任務解耦與前端效能翻新。
 
-## 🚀 核心功能
-- **全自動爬蟲引擎**: 定時抓取 OpenFDA、TFDA 及法規標準網站數據。
-- **AI 智能分析報告**: 整合指定效期內的歷史紀錄並透過 Google Gemini 產出專家評估報告。
-- **單筆紀錄 AI 點評**: 深入解析每一則召回或不良事件，並自動持久化儲存分析結果。
-- **大數據回補工具**: 提供專屬腳本突破 OpenFDA 單次分頁 25,000 筆之限制，支援數萬筆歷史資料同步。
-- **現代化介面**: 採用深色模式、Glassmorphism 設計，具備提醒通知與產品管理功能。
+## 🚀 核心功能與優化 (v2)
+- **架構解耦 (Scalable Architecture)**: 導入 **PostgreSQL** 與 **Celery + Redis** 異步架構，確保高併發爬蟲與大數據分析不阻塞主服務。
+- **全自動爬蟲引擎**: 定時抓取 OpenFDA、TFDA 及國際標準網站數據。
+- **React Query 效能翻新**: 前端全面採用 **React Query (@tanstack/react-query)**，提供智慧快取、背景重整與極速的分頁搜尋體驗。
+- **AI 專家分析 (Exponential Backoff)**: 透過 Google Gemini 產出專家評估報告，並具備帶有 Jitter 的指數退避機制，能應對 API 配額限制與自動輪調金鑰。
+- **Prometheus 監控**: 整合 Prometheus 效能指標監控，隨時掌握系統 API 延遲與錯誤率。
+- **容器化部署**: 支援 **Docker Compose** 一鍵部署完整的全疊加 (Full-stack) 服務。
 
 ## 🛠️ 技術棧
-- **Frontend**: React, Vite, CSS Vanilla (Modern Glassmorphism)
-- **Backend**: FastAPI, SQLite, APScheduler
-- **AI**: Google Gemini API (支援多組金鑰輪調)
+- **Frontend**: React, Vite, React Query, CSS Vanilla (Modern Glassmorphism)
+- **Backend**: FastAPI, PostgreSQL, Celery, Redis
+- **Monitoring**: Prometheus
+- **AI**: Google Gemini API (支援多組金鑰輪調與退避重試機)
 
-## 📦 安裝與啟動
+## 📦 快速啟動 (Docker 推薦)
 
-### 1. 後端設定 (Backend)
+這是最簡單且推薦的啟動方式：
+
 ```bash
-cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-# 設定 .env 中的 GEMINI_API_KEY_1, GEMINI_API_KEY_2, GEMINI_API_KEY_3
-uvicorn main:app --reload
+# 1. 複製專案
+git clone https://github.com/balboku/med-recall-monitor.git
+cd med-recall-monitor
+
+# 2. 設定環境變數
+# 在 backend/ 建立 .env 並填入 GEMINI_API_KEY_1~3
+
+# 3. 一鍵啟動
+docker-compose up -d --build
 ```
 
-### 2. 前端設定 (Frontend)
-```bash
-cd frontend
-npm install
-npm run dev
-```
+### 服務路徑：
+- **前端面板**: [http://localhost](http://localhost)
+- **API 服務**: [http://localhost:8000](http://localhost:8000)
+- **監控指標 (Prometheus)**: [http://localhost:9090](http://localhost:9090)
 
-### 3. 抓取歷史大數據 (例如 LFL 產品碼)
-若需要抓取超過 25,000 筆的 MAUDE 歷史紀錄，請運行：
-```bash
-python3 backend/scripts/fetch_historical_maude.py
-```
-
-## 📝 開發配置 (VS Code)
-本專案已配置 `.vscode/settings.json` 以正確解析後端路徑，解決 Pyre/Pylance 的型別警告。若開啟專案仍有紅線，請重啟 VS Code 視窗。
+## 📝 開發配置
+若需要手動開發環境：
+- **Backend**: `pip install -r backend/requirements.txt`
+- **Frontend**: `npm install && npm run dev`
 
 ## 🔗 聯絡與貢獻
 - **Repos**: [balboku/med-recall-monitor](https://github.com/balboku/med-recall-monitor.git)

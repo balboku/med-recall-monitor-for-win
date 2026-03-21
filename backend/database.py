@@ -34,6 +34,15 @@ class PgCursorWrapper:
         query = query.replace("?", "%s")
         # SQLite LIKE 預設不分大小寫，PostgreSQL 需轉為 ILIKE
         query = re.sub(r"(?i)\bLIKE\b", "ILIKE", query)
+        
+        # SQLite strftime('%Y-%m', col) -> PostgreSQL TO_CHAR(col, 'YYYY-MM')
+        def _repl_strftime(match):
+            fmt = match.group(1)
+            col = match.group(2)
+            pg_fmt = fmt.replace('%Y', 'YYYY').replace('%m', 'MM').replace('%d', 'DD')
+            return f"TO_CHAR({col}, '{pg_fmt}')"
+        query = re.sub(r"strftime\('([^']+)',\s*([^)]+)\)", _repl_strftime, query)
+        
         return query
 
     def execute(self, query, params=None):
