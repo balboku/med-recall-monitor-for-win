@@ -8,6 +8,8 @@ export default function Events() {
   const [eventType, setEventType] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [expandedId, setExpandedId] = useState(null);
+  const [aiInsights, setAiInsights] = useState({});
   const toggleExpand = (record) => {
     const isExpanding = expandedId !== record.id;
     setExpandedId(isExpanding ? record.id : null);
