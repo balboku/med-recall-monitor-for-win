@@ -1,17 +1,23 @@
 import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'react-hot-toast';
 import { api } from '../api';
 import { RefreshCw, Check } from 'lucide-react';
 
 export default function Header({ title, alertCount, onAlertsCleared }) {
   const [crawling, setCrawling] = useState(false);
+  const queryClient = useQueryClient();
 
   const handleCrawlAll = async () => {
     if (crawling) return;
     setCrawling(true);
     try {
       await api.triggerCrawl('all');
+      toast.success('已在背景佇列啟動所有爬蟲');
+      queryClient.invalidateQueries({ queryKey: ['crawlLogs'] });
+      queryClient.invalidateQueries({ queryKey: ['health'] });
     } catch (e) {
-      console.error('Crawl failed:', e);
+      toast.error(`啟動失敗: ${e.message}`);
     } finally {
       setCrawling(false);
     }
@@ -20,9 +26,12 @@ export default function Header({ title, alertCount, onAlertsCleared }) {
   const handleMarkAllRead = async () => {
     try {
       await api.markAllAlertsRead();
+      toast.success('已將所有告警標記為已讀');
+      queryClient.invalidateQueries({ queryKey: ['alerts'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
       onAlertsCleared?.();
     } catch (e) {
-      console.error(e);
+      toast.error(e.message || '標記已讀失敗');
     }
   };
 

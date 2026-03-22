@@ -22,6 +22,7 @@ export const api = {
 
   // P2-2: 健康監控
   getHealth: () => request('/health'),
+  getSystemInfo: () => request('/system-info'),
 
   // Products
   getProducts: () => request('/products'),

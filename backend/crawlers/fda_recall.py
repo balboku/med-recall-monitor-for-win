@@ -150,55 +150,64 @@ class FDARecallCrawler(BaseCrawler):
     async def run(self, **kwargs):
         """執行 FDA 召回爬蟲 (日常差量更新)"""
         started_at = datetime.now().isoformat()
+        log_id = self.start_crawl_log(started_at)
         products = self.get_active_products()
         total_found = 0
         total_new = 0
 
         logger.info(f"[{self.name}] 開始爬取，共 {len(products)} 個監控產品")
 
-        for product in products:
-            search_query = self._build_search_query(product)
-            if not search_query:
-                logger.warning(f"[{self.name}] 產品 '{product['name']}' 無搜尋條件，跳過")
-                continue
+        try:
+            for product in products:
+                search_query = self._build_search_query(product)
+                if not search_query:
+                    logger.warning(f"[{self.name}] 產品 '{product['name']}' 無搜尋條件，跳過")
+                    continue
 
-            try:
-                skip = 0
-                while True:
-                    # 日常爬取，不限制日期，僅取最新 (也可以在這裡加上近兩週的限制，但預設取100筆即可)
-                    data = await self._fetch_recalls(search_query, limit=100, skip=skip)
-                    results: list = data.get("results", [])
-                    total: int = data.get("meta", {}).get("results", {}).get("total", 0)
+                try:
+                    skip = 0
+                    product_total = 0
+                    product_new = 0
+                    while True:
+                        # 日常爬取，不限制日期，僅取最新 (也可以在這裡加上近兩週的限制，但預設取100筆即可)
+                        data = await self._fetch_recalls(search_query, limit=100, skip=skip)
+                        results: list = data.get("results", [])
+                        total: int = data.get("meta", {}).get("results", {}).get("total", 0)
 
-                    for item in results:
-                        recall_data = self._parse_recall(item, product["id"])
-                        total_found += 1
-                        if self._save_recall(recall_data):
-                            total_new += 1
-                            # 建立新召回提醒
-                            self.create_alert(
-                                alert_type="recall",
-                                title=f"新召回記錄: {recall_data['firm_name']}",
-                                message=f"{recall_data['reason'][:200]}",
-                                source="FDA",
-                                reference_id=None,
-                                reference_table="recalls",
-                            )
+                        for item in results:
+                            recall_data = self._parse_recall(item, product["id"])
+                            total_found += 1
+                            product_total += 1
+                            if self._save_recall(recall_data):
+                                total_new += 1
+                                product_new += 1
+                                # 建立新召回提醒
+                                self.create_alert(
+                                    alert_type="recall",
+                                    title=f"新召回記錄: {recall_data['firm_name']}",
+                                    message=f"{recall_data['reason'][:200]}",
+                                    source="FDA",
+                                    reference_id=None,
+                                    reference_table="recalls",
+                                )
 
-                    skip += len(results)
-                    # FDA 日常抓取建議不用取到翻頁，除非有新紀錄一直抓不完
-                    if skip >= total or not results or skip >= 500:
-                        break
+                        skip += len(results)
+                        # FDA 日常抓取建議不用取到翻頁，除非有新紀錄一直抓不完
+                        if skip >= total or not results or skip >= 500:
+                            break
 
-                logger.info(
-                    f"[{self.name}] 產品 '{product['name']}': "
-                    f"找到 {total} 筆，新增 {total_new} 筆"
-                )
+                    logger.info(
+                        f"[{self.name}] 產品 '{product['name']}': "
+                        f"找到 {product_total} 筆，新增 {product_new} 筆"
+                    )
 
-            except Exception as e:
-                logger.error(f"[{self.name}] 產品 '{product['name']}' 爬取失敗: {e}")
-                continue
+                except Exception as e:
+                    logger.error(f"[{self.name}] 產品 '{product['name']}' 爬取失敗: {e}")
+                    continue
 
-        self.log_crawl("success", total_found, total_new, started_at=started_at)
-        logger.info(f"[{self.name}] 完成: 共找到 {total_found} 筆，新增 {total_new} 筆")
-        return {"found": total_found, "new": total_new}
+            self.finish_crawl_log(log_id, "success", total_found, total_new)
+            logger.info(f"[{self.name}] 完成: 共找到 {total_found} 筆，新增 {total_new} 筆")
+            return {"found": total_found, "new": total_new}
+        except Exception as e:
+            self.finish_crawl_log(log_id, "error", total_found, total_new, str(e))
+            raise

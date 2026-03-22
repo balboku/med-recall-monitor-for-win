@@ -234,6 +234,7 @@ class StandardsCrawler(BaseCrawler):
     async def run(self, **kwargs):
         """執行標準版本檢查"""
         started_at = datetime.now().isoformat()
+        log_id = self.start_crawl_log(started_at)
         total_checked = 0
         total_updated = 0
 
@@ -247,42 +248,47 @@ class StandardsCrawler(BaseCrawler):
         if not standards:
             logger.info(f"[{self.name}] 無追蹤的標準，初始化預設清單")
             self.init_default_standards()
+            self.finish_crawl_log(log_id, "success", 0, 0)
             return {"checked": 0, "updated": 0}
 
         logger.info(f"[{self.name}] 開始檢查 {len(standards)} 個標準")
 
-        for std in standards:
-            source_url = std.get("source_url", "")
-            if not source_url:
-                continue
+        try:
+            for std in standards:
+                source_url = std.get("source_url", "")
+                if not source_url:
+                    continue
 
-            latest_info = await self._check_standard(std["standard_number"], source_url)
-            total_checked += 1
+                latest_info = await self._check_standard(std["standard_number"], source_url)
+                total_checked += 1
 
-            if latest_info:
-                updated = self._update_standard(std["id"], latest_info)
-                if updated:
-                    total_updated += 1
-                    has_update_val = self._is_under_revision(latest_info.get("status", ""))
-                    alert_msg = (
-                        f"標準 {std['standard_number']} 進入修訂中狀態，請關注後續版本發布"
-                        if has_update_val
-                        else f"最新版本: {latest_info.get('version', 'N/A')}"
-                    )
-                    alert_title = (
-                        f"⚠️ 標準修訂中: {std['standard_number']}"
-                        if has_update_val
-                        else f"📋 標準更新: {std['standard_number']}"
-                    )
-                    self.create_alert(
-                        alert_type="standard_update",
-                        title=alert_title,
-                        message=alert_msg,
-                        source="IEC/ISO",
-                        reference_id=std["id"],
-                        reference_table="standards",
-                    )
+                if latest_info:
+                    updated = self._update_standard(std["id"], latest_info)
+                    if updated:
+                        total_updated += 1
+                        has_update_val = self._is_under_revision(latest_info.get("status", ""))
+                        alert_msg = (
+                            f"標準 {std['standard_number']} 進入修訂中狀態，請關注後續版本發布"
+                            if has_update_val
+                            else f"最新版本: {latest_info.get('version', 'N/A')}"
+                        )
+                        alert_title = (
+                            f"⚠️ 標準修訂中: {std['standard_number']}"
+                            if has_update_val
+                            else f"📋 標準更新: {std['standard_number']}"
+                        )
+                        self.create_alert(
+                            alert_type="standard_update",
+                            title=alert_title,
+                            message=alert_msg,
+                            source="IEC/ISO",
+                            reference_id=std["id"],
+                            reference_table="standards",
+                        )
 
-        self.log_crawl("success", total_checked, total_updated, started_at=started_at)
-        logger.info(f"[{self.name}] 完成: 檢查 {total_checked} 個，更新 {total_updated} 個")
-        return {"checked": total_checked, "updated": total_updated}
+            self.finish_crawl_log(log_id, "success", total_checked, total_updated)
+            logger.info(f"[{self.name}] 完成: 檢查 {total_checked} 個，更新 {total_updated} 個")
+            return {"checked": total_checked, "updated": total_updated}
+        except Exception as e:
+            self.finish_crawl_log(log_id, "error", total_checked, total_updated, str(e))
+            raise

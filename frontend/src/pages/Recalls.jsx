@@ -1,63 +1,105 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import { api } from '../api';
 
-export default function Recalls() {
-  const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [source, setSource] = useState('');
-  const [classification, setClassification] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+function monthRange(month) {
+  const [year, mon] = month.split('-').map(Number);
+  const start = new Date(year, mon - 1, 1);
+  const end = new Date(year, mon, 0);
+  const format = (date) => date.toISOString().split('T')[0];
+  return [format(start), format(end)];
+}
 
-  // #4: debounce 即時搜尋
-  const debounceTimer = useRef(null);
-  useEffect(() => {
-    debounceTimer.current = setTimeout(() => {
-      setDebouncedSearch(search);
-      setPage(1);
-    }, 400);
-    return () => clearTimeout(debounceTimer.current);
-  }, [search]);
+export default function Recalls() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [expandedId, setExpandedId] = useState(null);
   const [aiInsights, setAiInsights] = useState({});
+  const [searchInput, setSearchInput] = useState(searchParams.get('search') || '');
+  const debounceTimer = useRef(null);
+
+  const page = Math.max(Number(searchParams.get('page') || '1') || 1, 1);
+  const source = searchParams.get('source') || '';
+  const classification = searchParams.get('classification') || '';
+  const startDate = searchParams.get('start_date') || '';
+  const endDate = searchParams.get('end_date') || '';
+  const productId = searchParams.get('product_id') || '';
+  const searchValue = searchParams.get('search') || '';
+
+  const updateParams = (updates, resetPage = true) => {
+    const next = new URLSearchParams(searchParams);
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value === '' || value === null || value === undefined) next.delete(key);
+      else next.set(key, String(value));
+    });
+    if (resetPage) next.set('page', '1');
+    setSearchParams(next);
+  };
+
+  useEffect(() => {
+    setSearchInput(searchValue);
+  }, [searchValue]);
+
+  useEffect(() => {
+    const month = searchParams.get('month');
+    if (!month || startDate || endDate) return;
+    const [monthStart, monthEnd] = monthRange(month);
+    const next = new URLSearchParams(searchParams);
+    next.set('start_date', monthStart);
+    next.set('end_date', monthEnd);
+    next.delete('month');
+    next.set('page', '1');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams, startDate, endDate]);
+
+  useEffect(() => {
+    debounceTimer.current = setTimeout(() => {
+      if (searchInput !== searchValue) updateParams({ search: searchInput });
+    }, 400);
+    return () => clearTimeout(debounceTimer.current);
+  }, [searchInput, searchValue]);
+
+  const { data: products = [] } = useQuery({
+    queryKey: ['products'],
+    queryFn: api.getProducts,
+  });
+
   const toggleExpand = (record) => {
     const isExpanding = expandedId !== record.id;
     setExpandedId(isExpanding ? record.id : null);
-    
-    // 如果正在展開，且該紀錄已有存儲的分析結果，但狀態中還沒有，則填入
     if (isExpanding && record.ai_analysis && !aiInsights[record.id]) {
-      setAiInsights(prev => ({ ...prev, [record.id]: record.ai_analysis }));
+      setAiInsights((prev) => ({ ...prev, [record.id]: record.ai_analysis }));
     }
   };
 
-  const handleAnalyzeRecord = async (type, record) => {
-    // 如果已經有分析結果且不是錯誤訊息，就不重複分析
+  const handleAnalyzeRecord = async (record) => {
     if (aiInsights[record.id] && !aiInsights[record.id].includes('分析錯誤')) return;
-    setAiInsights(prev => ({ ...prev, [record.id]: '<div class="spinner" style="display:inline-block;width:14px;height:14px;border-width:2px;border-color:var(--primary-color) transparent transparent transparent"></div> 分析中...' }));
+    setAiInsights((prev) => ({
+      ...prev,
+      [record.id]: '<div class="spinner" style="display:inline-block;width:14px;height:14px;border-width:2px;border-color:var(--accent-blue) transparent transparent transparent"></div> 分析中...',
+    }));
     try {
-      const res = await api.analyzeRecord({ 
-        record_type: type, 
+      const res = await api.analyzeRecord({
+        record_type: 'recall',
         record_id: record.id,
-        raw_data: JSON.stringify(record)
       });
-      setAiInsights(prev => ({ ...prev, [record.id]: res.html }));
+      setAiInsights((prev) => ({ ...prev, [record.id]: res.html }));
     } catch {
-      setAiInsights(prev => ({ ...prev, [record.id]: '<span class="text-status-error">分析錯誤，請重試</span>' }));
+      setAiInsights((prev) => ({ ...prev, [record.id]: '<span class="text-status-error">分析錯誤，請重試</span>' }));
     }
   };
 
   const { data: pageData, isFetching: loading } = useQuery({
-    queryKey: ['recalls', { page, debouncedSearch, source, classification, startDate, endDate }],
+    queryKey: ['recalls', { page, searchValue, source, classification, startDate, endDate, productId }],
     queryFn: () => {
       const params = { page, page_size: 15 };
-      if (debouncedSearch) params.search = debouncedSearch;
+      if (searchValue) params.search = searchValue;
       if (source) params.source = source;
       if (classification) params.classification = classification;
       if (startDate) params.start_date = startDate;
       if (endDate) params.end_date = endDate;
+      if (productId) params.product_id = productId;
       return api.getRecalls(params);
     },
     placeholderData: (previousData) => previousData,
@@ -65,7 +107,7 @@ export default function Recalls() {
 
   const { data: stats } = useQuery({
     queryKey: ['recalls_stats'],
-    queryFn: () => api.getRecallStats(),
+    queryFn: api.getRecallStats,
   });
 
   const recalls = pageData?.items || [];
@@ -74,23 +116,26 @@ export default function Recalls() {
 
   const handleSearch = (e) => {
     e.preventDefault();
-    setDebouncedSearch(search);
-    setPage(1);
+    updateParams({ search: searchInput });
   };
 
-  const classColor = (c) => {
-    if (c === 'Class I') return 'red';
-    if (c === 'Class II') return 'amber';
-    if (c === 'Class III') return 'green';
+  const clearFilters = () => {
+    setSearchInput('');
+    setSearchParams({});
+  };
+
+  const classColor = (classificationValue) => {
+    if (classificationValue === 'Class I') return 'red';
+    if (classificationValue === 'Class II') return 'amber';
+    if (classificationValue === 'Class III') return 'green';
     return 'blue';
   };
 
   return (
     <>
       <h1 className="page-title">召回記錄</h1>
-      <p className="page-subtitle">FDA 及 TFDA 醫療器材召回紀錄查詢</p>
+      <p className="page-subtitle">FDA 與 TFDA 召回資料查詢，支援 URL 篩選與 AI 單筆解析</p>
 
-      {/* Stats */}
       {stats && (
         <div className="stat-grid" style={{ marginBottom: 24 }}>
           <div className="stat-card" data-color="red">
@@ -98,60 +143,78 @@ export default function Recalls() {
             <div className="stat-value">{stats.total}</div>
             <div className="stat-sub">近 30 天 +{stats.recent_30d}</div>
           </div>
-          {Object.entries(stats.by_classification || {}).map(([k, v]) => (
-            <div key={k} className="stat-card" data-color={classColor(k)}>
-              <div className="stat-label">{k}</div>
-              <div className="stat-value">{v}</div>
+          {Object.entries(stats.by_classification || {}).map(([key, value]) => (
+            <div key={key} className="stat-card" data-color={classColor(key)}>
+              <div className="stat-label">{key}</div>
+              <div className="stat-value">{value}</div>
             </div>
           ))}
         </div>
       )}
 
-      {/* Filters */}
       <form className="search-bar" onSubmit={handleSearch}>
         <div className="search-input-wrapper" style={{ flex: 2 }}>
           <span className="search-icon">🔍</span>
           <input
             className="form-input"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             placeholder="搜尋產品描述、原因、廠商…"
           />
         </div>
+        <select
+          className="form-select"
+          style={{ width: 'auto', minWidth: 170 }}
+          value={productId}
+          onChange={(e) => updateParams({ product_id: e.target.value })}
+        >
+          <option value="">所有產品</option>
+          {products.map((product) => (
+            <option key={product.id} value={product.id}>{product.name}</option>
+          ))}
+        </select>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <input 
-            type="date" 
-            className="form-input" 
+          <input
+            type="date"
+            className="form-input"
             style={{ width: 'auto' }}
             value={startDate}
-            onChange={(e) => { setStartDate(e.target.value); setPage(1); }}
+            onChange={(e) => updateParams({ start_date: e.target.value })}
           />
           <span style={{ color: 'var(--text-tertiary)' }}>~</span>
-          <input 
-            type="date" 
-            className="form-input" 
+          <input
+            type="date"
+            className="form-input"
             style={{ width: 'auto' }}
             value={endDate}
-            onChange={(e) => { setEndDate(e.target.value); setPage(1); }}
+            onChange={(e) => updateParams({ end_date: e.target.value })}
           />
         </div>
-        <select className="form-select" style={{ width: 'auto', minWidth: 120 }}
-          value={source} onChange={(e) => { setSource(e.target.value); setPage(1); }}>
+        <select
+          className="form-select"
+          style={{ width: 'auto', minWidth: 120 }}
+          value={source}
+          onChange={(e) => updateParams({ source: e.target.value })}
+        >
           <option value="">所有來源</option>
           <option value="FDA">FDA</option>
           <option value="TFDA">TFDA</option>
         </select>
-        <select className="form-select" style={{ width: 'auto', minWidth: 120 }}
-          value={classification} onChange={(e) => { setClassification(e.target.value); setPage(1); }}>
+        <select
+          className="form-select"
+          style={{ width: 'auto', minWidth: 120 }}
+          value={classification}
+          onChange={(e) => updateParams({ classification: e.target.value })}
+        >
           <option value="">所有等級</option>
           <option value="Class I">Class I</option>
           <option value="Class II">Class II</option>
           <option value="Class III">Class III</option>
         </select>
         <button className="btn btn-secondary btn-sm" type="submit">搜尋</button>
+        <button className="btn btn-ghost btn-sm" type="button" onClick={clearFilters}>清除條件</button>
       </form>
 
-      {/* Table */}
       {loading ? (
         <div className="loading-overlay"><div className="spinner"></div><span>載入中…</span></div>
       ) : recalls.length === 0 ? (
@@ -169,6 +232,7 @@ export default function Recalls() {
               <thead>
                 <tr>
                   <th>召回編號</th>
+                  <th>監控產品</th>
                   <th>廠商</th>
                   <th>產品描述</th>
                   <th>原因</th>
@@ -179,100 +243,107 @@ export default function Recalls() {
                 </tr>
               </thead>
               <tbody>
-                {recalls.map((r) => (
-                  <React.Fragment key={r.id}>
-                  <tr style={{ cursor: 'pointer' }} onClick={() => toggleExpand(r)}>
-                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem' }}>
-                      {r.url ? (
-                        <a href={r.url} target="_blank" rel="noopener noreferrer">{r.recall_number || '—'}</a>
-                      ) : (r.recall_number || '—')}
-                    </td>
-                    <td>{r.firm_name || '—'}</td>
-                    <td style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {r.product_description || '—'}
-                    </td>
-                    <td style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {r.reason || '—'}
-                    </td>
-                    <td>
-                      {r.classification && (
-                        <span className={`tag tag-${classColor(r.classification)}`}>{r.classification}</span>
-                      )}
-                    </td>
-                    <td><span className="tag tag-blue">{r.source}</span></td>
-                    <td style={{ whiteSpace: 'nowrap', color: 'var(--text-tertiary)', fontSize: '0.8rem' }}>
-                      {r.recall_date || '—'}
-                    </td>
-                    <td style={{ fontSize: '0.8rem' }}>
-                      {expandedId === r.id ? '▲' : '▼'}
-                    </td>
-                  </tr>
-                  {expandedId === r.id && (
-                    <tr>
-                      <td colSpan={8} style={{ background: 'var(--bg-elevated)', padding: '16px 20px' }}>
-                        <div style={{ fontSize: '0.85rem', lineHeight: 1.7 }}>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <strong>產品詳細描述：</strong>
-                                <p style={{ color: 'var(--text-secondary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>{r.product_description || '無詳細描述'}</p>
-                            </div>
-                            <div>
-                                <strong>召回原因：</strong>
-                                <p style={{ color: 'var(--text-secondary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>{r.reason || '無詳細描述'}</p>
-                            </div>
-                          </div>
-                          <div style={{ marginTop: 16, display: 'flex', gap: '10px' }}>
-                            {r.url && (
-                            <a 
-                              href={r.url} 
-                              target="_blank" 
-                              rel="noopener noreferrer"
-                              className="btn btn-secondary btn-sm"
-                            >
-                              🔗 檢視原始來源
-                            </a>
-                            )}
-                            <button 
-                              className="btn btn-primary btn-sm ai-glow"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleAnalyzeRecord('recall', r);
-                              }}
-                            >
-                              ✨ AI 深度分析
-                            </button>
-                          </div>
-                          {aiInsights[r.id] && (
-                              <div className="mt-4 p-4 rounded bg-surface-300 ai-report-content text-sm" 
-                                   style={{ border: '1px solid var(--border-color)' }}
-                                   dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(aiInsights[r.id]) }} />
-                          )}
-                        </div>
+                {recalls.map((recall) => (
+                  <React.Fragment key={recall.id}>
+                    <tr style={{ cursor: 'pointer' }} onClick={() => toggleExpand(recall)}>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem' }}>
+                        {recall.url ? (
+                          <a href={recall.url} target="_blank" rel="noopener noreferrer">
+                            {recall.recall_number || '—'}
+                          </a>
+                        ) : (recall.recall_number || '—')}
                       </td>
+                      <td>{recall.product_name || '—'}</td>
+                      <td>{recall.firm_name || '—'}</td>
+                      <td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {recall.product_description || '—'}
+                      </td>
+                      <td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {recall.reason || '—'}
+                      </td>
+                      <td>
+                        {recall.classification && (
+                          <span className={`tag tag-${classColor(recall.classification)}`}>{recall.classification}</span>
+                        )}
+                      </td>
+                      <td><span className="tag tag-blue">{recall.source}</span></td>
+                      <td style={{ whiteSpace: 'nowrap', color: 'var(--text-tertiary)', fontSize: '0.8rem' }}>
+                        {recall.recall_date || '—'}
+                      </td>
+                      <td style={{ fontSize: '0.8rem' }}>{expandedId === recall.id ? '▲' : '▼'}</td>
                     </tr>
-                  )}
+                    {expandedId === recall.id && (
+                      <tr>
+                        <td colSpan={9} style={{ background: 'var(--bg-elevated)', padding: '16px 20px' }}>
+                          <div style={{ fontSize: '0.85rem', lineHeight: 1.7 }}>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div>
+                                <strong>產品詳細描述：</strong>
+                                <p style={{ color: 'var(--text-secondary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>
+                                  {recall.product_description || '無詳細描述'}
+                                </p>
+                              </div>
+                              <div>
+                                <strong>召回原因：</strong>
+                                <p style={{ color: 'var(--text-secondary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>
+                                  {recall.reason || '無詳細描述'}
+                                </p>
+                              </div>
+                            </div>
+                            <div style={{ marginTop: 16, display: 'flex', gap: '10px' }}>
+                              {recall.url && (
+                                <a href={recall.url} target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm">
+                                  🔗 檢視原始來源
+                                </a>
+                              )}
+                              <button
+                                className="btn btn-primary btn-sm ai-glow"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleAnalyzeRecord(recall);
+                                }}
+                              >
+                                ✨ AI 深度分析
+                              </button>
+                            </div>
+                            {aiInsights[recall.id] && (
+                              <div
+                                className="mt-4 p-4 rounded bg-surface-300 ai-report-content text-sm"
+                                style={{ border: '1px solid var(--border-color)' }}
+                                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(aiInsights[recall.id]) }}
+                              />
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
                   </React.Fragment>
                 ))}
               </tbody>
             </table>
           </div>
 
-          {/* Pagination */}
           <div className="pagination">
-            <button disabled={page <= 1} onClick={() => setPage(page - 1)}>‹</button>
+            <button disabled={page <= 1} onClick={() => updateParams({ page: page - 1 }, false)}>‹</button>
             {(() => {
               const maxVisible = 7;
-              let start = 1, end = pages;
+              let start = 1;
+              let end = pages;
               if (pages > maxVisible) {
                 start = Math.max(1, page - Math.floor(maxVisible / 2));
                 end = start + maxVisible - 1;
-                if (end > pages) { end = pages; start = Math.max(1, end - maxVisible + 1); }
+                if (end > pages) {
+                  end = pages;
+                  start = Math.max(1, end - maxVisible + 1);
+                }
               }
-              return Array.from({ length: end - start + 1 }, (_, i) => start + i).map(p => (
-                <button key={p} className={p === page ? 'active' : ''} onClick={() => setPage(p)}>{p}</button>
+              return Array.from({ length: end - start + 1 }, (_, index) => start + index).map((value) => (
+                <button key={value} className={value === page ? 'active' : ''} onClick={() => updateParams({ page: value }, false)}>
+                  {value}
+                </button>
               ));
             })()}
-            <button disabled={page >= pages} onClick={() => setPage(page + 1)}>›</button>
+            <button disabled={page >= pages} onClick={() => updateParams({ page: page + 1 }, false)}>›</button>
             <span style={{ marginLeft: 12, fontSize: '0.78rem', color: 'var(--text-tertiary)' }}>
               共 {total} 筆
             </span>

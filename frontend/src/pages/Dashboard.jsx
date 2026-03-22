@@ -257,7 +257,13 @@ export default function Dashboard() {
               trend.product_ranking.slice(0, 5).map(r => {
                 const maxRecall = Math.max(...trend.product_ranking.map(x => x.recall_count), 1);
                 return (
-                  <div key={r.product_name}>
+                  <div
+                    key={r.product_name}
+                    style={{ cursor: r.product_id ? 'pointer' : 'default' }}
+                    onClick={() => {
+                      if (r.product_id) navigate(`/recalls?product_id=${r.product_id}`);
+                    }}
+                  >
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '6px', fontWeight: 500 }}>
                       <span style={{ color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '70%' }}>{r.product_name}</span>
                       <span style={{ color: 'var(--text-secondary)' }}><strong style={{ color: 'var(--text-primary)' }}>{r.recall_count}</strong> 件</span>
@@ -294,7 +300,7 @@ export default function Dashboard() {
                   <div 
                     key={r.id} 
                     style={{ padding: '12px', background: 'var(--bg-surface)', borderRadius: '8px', cursor: 'pointer', transition: 'background 0.2s', border: '1px solid transparent' }}
-                    onClick={() => navigate(`/recalls`)}
+                    onClick={() => navigate(r.product_id ? `/recalls?product_id=${r.product_id}` : '/recalls')}
                     onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--glass-border)'; e.currentTarget.style.background = 'var(--bg-primary)'; }}
                     onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'transparent'; e.currentTarget.style.background = 'var(--bg-surface)'; }}
                   >

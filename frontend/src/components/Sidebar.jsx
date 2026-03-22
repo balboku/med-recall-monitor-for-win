@@ -2,17 +2,19 @@ import { NavLink } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   Bell, 
+  Activity,
   AlertTriangle, 
   ClipboardList, 
   Sparkles, 
   Search, 
   Settings,
-  Activity
+  ShieldAlert
 } from 'lucide-react';
 
 const navItems = [
   { section: '監控總覽' },
   { path: '/', icon: <LayoutDashboard size={18} />, label: 'Dashboard' },
+  { path: '/alerts', icon: <ShieldAlert size={18} />, label: '告警中心' },
   { section: '資料查詢' },
   { path: '/recalls', icon: <Bell size={18} />, label: '召回記錄' },
   { path: '/events', icon: <AlertTriangle size={18} />, label: '不良事件' },
@@ -49,7 +51,7 @@ export default function Sidebar({ alertCount }) {
             >
               <span className="nav-icon">{item.icon}</span>
               <span>{item.label}</span>
-              {item.path === '/' && alertCount > 0 && (
+              {item.path === '/alerts' && alertCount > 0 && (
                 <span className="nav-badge">{alertCount}</span>
               )}
             </NavLink>

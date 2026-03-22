@@ -79,6 +79,48 @@ class BaseCrawler:
         finally:
             conn.close()
 
+    def start_crawl_log(self, started_at: Optional[str] = None) -> int:
+        """建立執行中日誌，供前端即時觀察任務狀態"""
+        conn = get_db()
+        try:
+            cursor = conn.execute("""
+                INSERT INTO crawl_logs (
+                    crawler_name, status, records_found, new_records,
+                    error_message, started_at, completed_at
+                )
+                VALUES (?, 'running', 0, 0, NULL, ?, NULL)
+            """, (self.name, started_at or datetime.now().isoformat()))
+            conn.commit()
+            return cursor.lastrowid or 0
+        finally:
+            conn.close()
+
+    def finish_crawl_log(self, log_id: int, status: str, records_found: int = 0,
+                         new_records: int = 0, error_message: Optional[str] = None):
+        """更新執行中日誌為最終狀態"""
+        if not log_id:
+            self.log_crawl(status, records_found, new_records, error_message)
+            return
+
+        conn = get_db()
+        try:
+            conn.execute("""
+                UPDATE crawl_logs
+                SET status = ?, records_found = ?, new_records = ?,
+                    error_message = ?, completed_at = ?
+                WHERE id = ?
+            """, (
+                status,
+                records_found,
+                new_records,
+                error_message,
+                datetime.now().isoformat(),
+                log_id,
+            ))
+            conn.commit()
+        finally:
+            conn.close()
+
     def create_alert(self, alert_type: str, title: str, message: str,
                      source: str, reference_id: Optional[int] = None,
                      reference_table: Optional[str] = None):

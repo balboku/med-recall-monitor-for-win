@@ -65,6 +65,7 @@ def get_recall_trend(period: str = Query("3months", description="期間: 1month 
         # 各產品召回統計排名
         product_ranking = conn.execute("""
             SELECT
+                p.id as product_id,
                 p.name as product_name,
                 COUNT(r.id) as recall_count,
                 SUM(CASE WHEN r.classification LIKE '%Class I%' THEN 1 ELSE 0 END) as class1_count

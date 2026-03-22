@@ -3,6 +3,7 @@ import { Toaster } from 'react-hot-toast';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import Dashboard from './pages/Dashboard';
+import Alerts from './pages/Alerts';
 import Products from './pages/Products';
 import Recalls from './pages/Recalls';
 import Events from './pages/Events';
@@ -16,6 +17,7 @@ import { useQuery } from '@tanstack/react-query';
 const pageTitles = {
   '/': 'Dashboard 總覽',
   '/products': '產品監控管理',
+  '/alerts': '告警中心',
   '/recalls': '召回記錄',
   '/events': '不良事件',
   '/standards': '法規標準',
@@ -49,6 +51,7 @@ function AppContent() {
       <main className="main-content">
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/alerts" element={<Alerts />} />
           <Route path="/products" element={<Products />} />
           <Route path="/recalls" element={<Recalls />} />
           <Route path="/events" element={<Events />} />

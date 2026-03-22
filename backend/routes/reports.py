@@ -37,7 +37,8 @@ def get_reports():
     reports = cursor.execute("""
         SELECT r.id, r.product_id, p.name as product_name, r.start_date, r.end_date,
                r.stats_json, r.report_status, r.generated_by, r.approved_by,
-               r.approved_at, r.data_truncated, r.total_records_analyzed, r.created_at
+               r.approved_at, r.data_truncated, r.total_records_analyzed,
+               r.created_at, r.superseded_by, r.model_used
         FROM reports r
         JOIN products p ON r.product_id = p.id
         ORDER BY r.id DESC
@@ -218,9 +219,11 @@ def delete_report(report_id: int, request: Request, operator: Optional[str] = "s
     """P9: 刪除報告"""
     conn = get_db()
     try:
-        report = conn.execute("SELECT id FROM reports WHERE id = ?", (report_id,)).fetchone()
+        report = conn.execute("SELECT id, report_status FROM reports WHERE id = ?", (report_id,)).fetchone()
         if not report:
             raise HTTPException(status_code=404, detail="Report not found")
+        if report["report_status"] == "approved":
+            raise HTTPException(status_code=400, detail="已核准的報告不可刪除，請改用廢止流程")
 
         ip = request.client.host if request.client else None
         

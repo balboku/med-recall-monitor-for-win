@@ -207,75 +207,86 @@ class FDAMaudeCrawler(BaseCrawler):
     async def run(self, historical: bool = False, **kwargs) -> Dict[str, int]:
         """執行 MAUDE 不良事件爬蟲，historical=True 時採用分年抓取全量資料"""
         started_at = datetime.now().isoformat()
+        log_id = self.start_crawl_log(started_at)
         products = self.get_active_products()
         total_found: int = 0
         total_new: int = 0
 
         logger.info(f"[{self.name}] 開始爬取 ({'歷史同步' if historical else '常規'}), 共 {len(products)} 個監控產品")
 
-        for product in products:
-            # historical 模式不加關鍵字，才能查到全量資料
-            search_query = self._build_search_query(product, historical=historical)
-            if not search_query:
-                continue
+        try:
+            for product in products:
+                # historical 模式不加關鍵字，才能查到全量資料
+                search_query = self._build_search_query(product, historical=historical)
+                if not search_query:
+                    continue
 
-            try:
-                if historical:
-                    # 歷史模式：以年份切割，每年最多 25000 筆，突破 API 上限
-                    start_year = 2000
-                    end_year = datetime.now().year
-                    for year in range(start_year, end_year + 1):
-                        year_query = f"({search_query}) AND date_received:[{year}0101 TO {year}1231]"
+                try:
+                    product_total = 0
+                    product_new = 0
+                    if historical:
+                        # 歷史模式：以年份切割，每年最多 25000 筆，突破 API 上限
+                        start_year = 2000
+                        end_year = datetime.now().year
+                        for year in range(start_year, end_year + 1):
+                            year_query = f"({search_query}) AND date_received:[{year}0101 TO {year}1231]"
+                            skip = 0
+                            while skip < 24900:
+                                try:
+                                    data = await self._fetch_events(year_query, limit=100, skip=skip)
+                                    results: list = data.get("results", [])
+                                    total: int = data.get("meta", {}).get("results", {}).get("total", 0)
+                                    for item in results:
+                                        event_data = self._parse_event(item, product["id"])
+                                        total_found += 1
+                                        product_total += 1
+                                        if self._save_event(event_data):
+                                            total_new += 1
+                                            product_new += 1
+                                    skip += len(results)
+                                    if skip >= total or not results:
+                                        break
+                                except Exception:
+                                    break  # 如果該年無資料，繼續下一年
+                            if total_found > 0 and (total_found % 1000) == 0:
+                                logger.info(f"[{self.name}] 歷史同步進度: 已儲存 {total_new} 筆")
+                    else:
+                        # 常規模式：最多抓近期 500 筆
                         skip = 0
-                        while skip < 24900:
-                            try:
-                                data = await self._fetch_events(year_query, limit=100, skip=skip)
-                                results: list = data.get("results", [])
-                                total: int = data.get("meta", {}).get("results", {}).get("total", 0)
-                                for item in results:
-                                    event_data = self._parse_event(item, product["id"])
-                                    total_found = total_found + 1  # type: ignore
-                                    if self._save_event(event_data):
-                                        total_new = total_new + 1  # type: ignore
-                                skip += len(results)  # type: ignore
-                                if skip >= total or not results:
-                                    break
-                            except Exception:
-                                break  # 如果該年無資料，繼續下一年
-                        if total_found > 0 and (total_found % 1000) == 0:  # type: ignore
-                            logger.info(f"[{self.name}] 歷史同步進度: 已儲存 {total_new} 筆")
-                else:
-                    # 常規模式：最多抓近期 500 筆
-                    skip = 0
-                    max_results = 500
-                    while skip < max_results:
-                        data = await self._fetch_events(search_query, limit=100, skip=skip)
-                        results = data.get("results", [])
-                        total = data.get("meta", {}).get("results", {}).get("total", 0)
+                        max_results = 500
+                        while skip < max_results:
+                            data = await self._fetch_events(search_query, limit=100, skip=skip)
+                            results = data.get("results", [])
+                            total = data.get("meta", {}).get("results", {}).get("total", 0)
 
-                        for item in results:
-                            event_data = self._parse_event(item, product["id"])
-                            total_found = total_found + 1  # type: ignore
-                            if self._save_event(event_data):
-                                total_new = total_new + 1  # type: ignore
-                                self.create_alert(
-                                    alert_type="adverse_event",
-                                    title=f"新不良事件: {event_data['brand_name']}",
-                                    message=f"[{event_data['event_type']}] {event_data['event_description'][:150]}",
-                                    source="FDA_MAUDE",
-                                    reference_table="adverse_events",
-                                )
+                            for item in results:
+                                event_data = self._parse_event(item, product["id"])
+                                total_found += 1
+                                product_total += 1
+                                if self._save_event(event_data):
+                                    total_new += 1
+                                    product_new += 1
+                                    self.create_alert(
+                                        alert_type="adverse_event",
+                                        title=f"新不良事件: {event_data['brand_name']}",
+                                        message=f"[{event_data['event_type']}] {event_data['event_description'][:150]}",
+                                        source="FDA_MAUDE",
+                                        reference_table="adverse_events",
+                                    )
 
-                        skip += len(results)  # type: ignore
-                        if skip >= total or not results:
-                            break
+                            skip += len(results)
+                            if skip >= total or not results:
+                                break
 
-                logger.info(f"[{self.name}] 產品 '{product['name']}': 本輪共 {total_found} 筆")
+                    logger.info(f"[{self.name}] 產品 '{product['name']}': 本輪找到 {product_total} 筆，新增 {product_new} 筆")
 
-            except Exception as e:
-                logger.error(f"[{self.name}] 產品 '{product['name']}' 爬取失敗: {e}")
-                continue
+                except Exception as e:
+                    logger.error(f"[{self.name}] 產品 '{product['name']}' 爬取失敗: {e}")
+                    continue
 
-        self.log_crawl("success", total_found, total_new, started_at=started_at)
-        logger.info(f"[{self.name}] 完成: 共找到 {total_found} 筆，新增 {total_new} 筆")
-        return {"found": total_found, "new": total_new}
+            self.finish_crawl_log(log_id, "success", total_found, total_new)
+            logger.info(f"[{self.name}] 完成: 共找到 {total_found} 筆，新增 {total_new} 筆")
+            return {"found": total_found, "new": total_new}
+        except Exception as e:
+            self.finish_crawl_log(log_id, "error", total_found, total_new, str(e))
+            raise

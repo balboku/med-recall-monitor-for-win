@@ -1,12 +1,20 @@
 import os
 import logging
 import threading
+import platform
 from contextlib import asynccontextmanager
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version as package_version
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from database import init_db, migrate_db
 from scheduler import init_scheduler, shutdown_scheduler
+from config import (
+    CRAWL_INTERVAL_FDA_RECALL,
+    CRAWL_INTERVAL_FDA_MAUDE,
+    CRAWL_INTERVAL_TFDA,
+    CRAWL_INTERVAL_STANDARDS,
+)
 from crawlers.standards import StandardsCrawler
 from crawlers.fda_recall import FDARecallCrawler
 from crawlers.fda_maude import FDAMaudeCrawler
@@ -22,6 +30,13 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+def _safe_package_version(name: str) -> str:
+    try:
+        return package_version(name)
+    except PackageNotFoundError:
+        return "unknown"
 
 
 @asynccontextmanager
@@ -145,6 +160,34 @@ def health_check():
         conn.close()
 
 
+@app.get("/api/system-info")
+def get_system_info():
+    from database import DATABASE_URL as ACTIVE_DATABASE_URL
+    return {
+        "api_version": app.version,
+        "database_backend": "postgresql" if ACTIVE_DATABASE_URL else "sqlite",
+        "scheduler": {
+            "mode": "interval",
+            "crawlers": {
+                "fda_recall": {"interval_hours": CRAWL_INTERVAL_FDA_RECALL},
+                "fda_maude": {"interval_hours": CRAWL_INTERVAL_FDA_MAUDE},
+                "tfda": {"interval_hours": CRAWL_INTERVAL_TFDA},
+                "standards": {"interval_hours": CRAWL_INTERVAL_STANDARDS},
+            },
+        },
+        "stack": {
+            "python": platform.python_version(),
+            "fastapi": _safe_package_version("fastapi"),
+            "celery": _safe_package_version("celery"),
+            "redis_client": _safe_package_version("redis"),
+            "httpx": _safe_package_version("httpx"),
+        },
+        "runtime": {
+            "allowed_origins": ALLOWED_ORIGINS,
+        },
+    }
+
+
 @app.post("/api/crawl/{crawler_name}")
 async def trigger_crawl(crawler_name: str, historical: bool = False):
     """手動觸發爬蟲（轉交 Celery 非同步執行），支援 historical=true 抓取大量數據"""
@@ -172,7 +215,7 @@ def get_crawl_logs():
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT * FROM crawl_logs ORDER BY completed_at DESC LIMIT 50"
+            "SELECT * FROM crawl_logs ORDER BY COALESCE(completed_at, started_at) DESC LIMIT 50"
         ).fetchall()
         return [dict(row) for row in rows]
     finally:

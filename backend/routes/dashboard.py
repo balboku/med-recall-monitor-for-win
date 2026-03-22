@@ -47,7 +47,7 @@ def get_dashboard():
 
         # 有更新的標準數
         row = conn.execute(
-            "SELECT COUNT(*) as count FROM standards WHERE has_update = 1"
+            "SELECT COUNT(*) as count FROM standards WHERE has_update > 0"
         ).fetchone()
         stats["standards_with_updates"] = row["count"]
 
@@ -81,6 +81,8 @@ def get_dashboard():
 def list_alerts(
     is_read: Optional[int] = None,
     alert_type: Optional[str] = None,
+    source: Optional[str] = None,
+    severity: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
@@ -96,6 +98,12 @@ def list_alerts(
         if alert_type:
             conditions.append("alert_type = ?")
             params.append(alert_type)
+        if source:
+            conditions.append("source = ?")
+            params.append(source)
+        if severity:
+            conditions.append("severity = ?")
+            params.append(severity)
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         offset = (page - 1) * page_size

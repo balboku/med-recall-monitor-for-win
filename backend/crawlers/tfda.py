@@ -114,13 +114,14 @@ class TFDACrawler(BaseCrawler):
     async def run(self, **kwargs):
         """執行 TFDA 爬蟲"""
         started_at = datetime.now().isoformat()
+        log_id = self.start_crawl_log(started_at)
         products = self.get_active_products()
         total_found = 0
         total_new = 0
 
         if not products:
             logger.info(f"[{self.name}] 無監控產品，跳過")
-            self.log_crawl("success", 0, 0, started_at=started_at)
+            self.finish_crawl_log(log_id, "success", 0, 0)
             return {"found": 0, "new": 0}
 
         logger.info(f"[{self.name}] 開始爬取 TFDA 安全警訊")
@@ -153,9 +154,9 @@ class TFDACrawler(BaseCrawler):
 
         except Exception as e:
             logger.error(f"[{self.name}] 爬取失敗: {e}")
-            self.log_crawl("error", total_found, total_new, str(e), started_at)
+            self.finish_crawl_log(log_id, "error", total_found, total_new, str(e))
             return {"found": total_found, "new": total_new}
 
-        self.log_crawl("success", total_found, total_new, started_at=started_at)
+        self.finish_crawl_log(log_id, "success", total_found, total_new)
         logger.info(f"[{self.name}] 完成: 匹配 {total_found} 筆，新增 {total_new} 筆")
         return {"found": total_found, "new": total_new}
