@@ -55,6 +55,47 @@ class FDAMaudeCrawler(BaseCrawler):
         response = await self.get(FDA_EVENT_ENDPOINT, params=params)
         return response.json()
 
+    def _extract_device_problem(self, item: dict, device: dict) -> str:
+        """從 MAUDE 原始資料擷取問題欄位，避免將 product code 誤當故障模式"""
+        problem_candidates = []
+
+        patient_problems = item.get("patient_problem", [])
+        if isinstance(patient_problems, list):
+            for problem in patient_problems:
+                if isinstance(problem, dict):
+                    code = str(problem.get("patient_problem_code", "")).strip()
+                    text = str(problem.get("patient_problem_text", "")).strip()
+                    if text and code:
+                        problem_candidates.append(f"{text} ({code})")
+                    elif text:
+                        problem_candidates.append(text)
+                    elif code:
+                        problem_candidates.append(code)
+
+        device_problems = device.get("device_problem", [])
+        if isinstance(device_problems, list):
+            for problem in device_problems:
+                if isinstance(problem, dict):
+                    code = str(problem.get("device_problem_code", "")).strip()
+                    text = str(problem.get("device_problem_text", "")).strip()
+                    if text and code:
+                        problem_candidates.append(f"{text} ({code})")
+                    elif text:
+                        problem_candidates.append(text)
+                    elif code:
+                        problem_candidates.append(code)
+                elif isinstance(problem, str) and problem.strip():
+                    problem_candidates.append(problem.strip())
+
+        unique_problems = []
+        seen_problems = set()
+        for problem in problem_candidates:
+            if problem and problem not in seen_problems:
+                unique_problems.append(problem)
+                seen_problems.add(problem)
+
+        return ", ".join(unique_problems)
+
     def _parse_event(self, item: dict, product_id: int) -> dict:
         """解析單筆不良事件"""
         devices: list = item.get("device", [{}])
@@ -98,7 +139,7 @@ class FDAMaudeCrawler(BaseCrawler):
             "date_received": formatted_date,
             "brand_name": device.get("brand_name", ""),
             "manufacturer": device.get("manufacturer_d_name", ""),
-            "device_problem": ", ".join(device.get("device_report_product_code", "") if isinstance(device.get("device_report_product_code"), list) else []),
+            "device_problem": self._extract_device_problem(item, device),
             "event_description": event_description[:2000],
             "patient_outcome": ", ".join(outcomes),
             "raw_data": json.dumps(item, ensure_ascii=False),
@@ -136,7 +177,7 @@ class FDAMaudeCrawler(BaseCrawler):
 
     async def run_history(self, product: dict, start_date: str, end_date: str) -> int:
         """爬取指定產品與日期範圍的大量歷史不良事件紀錄，回傳處理筆數 (避免 OOM)"""
-        search_query = self._build_search_query(product)
+        search_query = self._build_search_query(product, historical=True)
         if not search_query:
             return 0
             

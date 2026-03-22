@@ -1,109 +1,223 @@
-# 🩺 Med-Recall-Monitor (MedWatch AI)
+# Med-Recall-Monitor
 
-> **全方位的醫療器材全球監管與 AI 風險分析平台。** 🚀
+醫療器材監控與 AI 分析系統，整合 FDA Recall、FDA MAUDE、TFDA 安全警訊與標準版本追蹤，提供儀表板、告警、歷史查詢與 AI 報告生成功能。
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tech: FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688.svg)](https://fastapi.tiangolo.com/)
-[![Tech: React](https://img.shields.io/badge/Frontend-React-61DAFB.svg)](https://reactjs.org/)
-[![AI: Gemini](https://img.shields.io/badge/AI-Gemini%203.1-blue.svg)](https://deepmind.google/technologies/gemini/)
+## 專案目標
 
-## 📖 專案簡介
-**Med-Recall-Monitor** 是一款專為醫療器材從業者（RA/QA）設計的自動化監測與分析工具。它能即時追蹤 FDA（Recall, MAUDE）與 TFDA 的最新公告，並利用 **Gemini 3.1 AI** 進行深度的風險評估與技術失效模式分析，將碎片化的監管數據轉化為具備前瞻性的執行建議。
+這套系統的核心目的不是單純「爬資料」，而是把監控流程拆成 4 個連續階段：
 
----
+1. 定義監控產品
+2. 定時抓取外部監管資料
+3. 寫入本地資料庫並產生告警
+4. 由前端查詢資料，或交給 AI 生成深度分析報告
 
-## ✨ 核心特性
+## 系統執行邏輯
 
-- **🌐 全球數據同步**：自動爬取美國 FDA (MAUDE 不良事件 & Recall 召回) 與台灣 TFDA 的基準數據。
-- **🤖 AI 深度解析**：內建專業醫材專家 Persona，自動產出符合 ISO 14971 標準的風險矩陣與技術根本原因分析。
-- **📊 專業視覺化報表**：自動分類產品、型號與失效模式，並生成具備互動圖表的 HTML 專家報表。
-- **📜 標準規章追蹤**：監控國際與國內醫療器材標準的版本變動，並在有更新時主動推送警示。
-- **🛡️ 稽核完整性 (Audit Trail)**：系統完整記錄所有報告生成與審核細節，確保符合 GxP 合規性要求。
-- **⚡ 開發者友好**：全棧 Docker 化並支援 **Hot-Reload**，代碼變更即時反映。
+### 1. 啟動階段
 
----
+當 `backend/main.py` 啟動 FastAPI 時，會依序做這幾件事：
 
-## 🛠️ 技術架構
+1. 初始化資料庫與補 migration
+2. 建立預設的標準追蹤清單
+3. 啟動 APScheduler
+4. 掛載各 API 路由
 
-| 組件 | 技術選擇 | 理由 |
-| :--- | :--- | :--- |
-| **Backend** | **FastAPI (Python)** | 高性能、自動生成 OpenAPI 文檔，適合數據密集型應用。 |
-| **Worker** | **Celery + Redis** | 處理耗時的網路爬蟲與 AI 分析任務，確保前端響應不阻塞。 |
-| **Frontend** | **React + Vite** | 極速開發體驗與 HMR，提供專業的醫療級 UI 管理介面。 |
-| **Database** | **PostgreSQL** | 強大的關聯性數據處理，支援複雜的監管數據查詢。 |
-| **AI Engine** | **Gemini 3.1 Flash Lite** | 具備市場頂尖的長文本處理能力與高達 500 RPD 的配額，適合批量報表生成。 |
+這代表 API server 本身除了提供 REST API，也會負責排程發送背景任務。
 
----
+### 2. 排程與背景任務
 
-## 🚀 快速開始
+系統採用兩層背景機制：
 
-### 環境需求
-- Docker & Docker Compose
-- Gemini API Key (請至 Google AI Studio 申請)
+- `APScheduler`
+  - 跑在 FastAPI process 內
+  - 只負責「定時觸發」
+- `Celery + Redis`
+  - 真正執行爬蟲與報告生成
+  - 避免 API 被長時間工作阻塞
 
-### 安裝步驟
+目前預設排程如下：
 
-1. **複製專案**
-   ```bash
-   git clone https://github.com/your-repo/med-recall-monitor.git
-   cd med-recall-monitor
-   ```
+- FDA Recall：每 24 小時
+- FDA MAUDE：每 24 小時
+- TFDA：每 24 小時
+- Standards：每 168 小時
 
-2. **配置環境變數**
-   在根目錄創建 `.env` 文件：
-   ```env
-   GEMINI_API_KEY_1=your_key_here
-   DATABASE_URL=postgresql://user:pass@db:5432/medwatch
-   REDIS_URL=redis://redis:6379/0
-   ```
+可用環境變數覆蓋：
 
-3. **啟動系統 (含熱重載)**
-   ```bash
-   chmod +x restart_system.command
-   ./restart_system.command
-   ```
-   系統啟動後：
-   - 前端：`http://localhost:5173`
-   - 後端 API：`http://localhost:8000/docs`
+- `CRAWL_INTERVAL_FDA_RECALL`
+- `CRAWL_INTERVAL_FDA_MAUDE`
+- `CRAWL_INTERVAL_TFDA`
+- `CRAWL_INTERVAL_STANDARDS`
 
----
+### 3. 爬蟲資料流
 
-## 💻 程式碼範例：AI 深度分析 API
+#### FDA Recall
 
-這是我們最核心的 AI 分析調用片段，展示了如何將原始監管數據轉化為專家意見：
+- 讀取 `products` 表中 `is_active = 1` 的產品
+- 以 `fda_product_codes` 與 `keywords` 組成 openFDA 查詢
+- 抓取召回資料後寫入 `recalls`
+- 若是新資料，新增 `alerts`
+- 執行結果寫入 `crawl_logs`
 
-```python
-@router.post("/analyze-record")
-def analyze_record(req: AnalyzeRecordRequest):
-    # 自動補齊：若前端沒傳 raw_data，系統會根據 ID 從資料庫獲取
-    raw_data = req.raw_data or fetch_from_db(req.record_id)
-    
-    # 調用 Gemini 執行深度分析 (ISO 14971 框架)
-    html_insight = ai_service.analyze_single_record(req.record_type, raw_data)
-    
-    # 持久化分析結果，避免重複消耗 Token
-    save_to_db(req.record_id, html_insight)
-    
-    return {"html": html_insight}
+#### FDA MAUDE
+
+- 同樣以啟用中的產品為來源
+- 以 product code 與關鍵字組成事件搜尋條件
+- 將不良事件寫入 `adverse_events`
+- 若是新資料，新增 `alerts`
+- 執行結果寫入 `crawl_logs`
+
+#### TFDA
+
+- 讀取 TFDA 安全警訊頁面
+- 以產品關鍵字比對標題
+- 命中的項目以召回形式寫入 `recalls`
+- 新資料建立 `alerts`
+
+#### Standards
+
+- 追蹤 `standards` 表中的標準網址
+- 解析 IEC / ISO 頁面版本資訊
+- 若版本更新或進入修訂狀態，更新 `standards.has_update`
+- 同步建立 `alerts`
+
+### 4. 前端使用邏輯
+
+前端頁面對應的主要工作如下：
+
+- `Dashboard`
+  - 顯示 KPI、趨勢、最新爬蟲記錄、未讀告警
+- `Products`
+  - 建立監控產品
+  - 設定關鍵字與 FDA product code
+  - 啟用或停用監控
+- `Recalls`
+  - 查詢召回資料
+- `Events`
+  - 查詢不良事件資料
+- `Standards`
+  - 管理追蹤中的法規標準
+- `Reports`
+  - 針對選定產品與日期區間產生 AI 報告
+- `Settings`
+  - 系統設定頁面
+
+### 5. AI 報告生成流程
+
+從前端按下「生成深度報告」後，系統流程如下：
+
+1. `POST /api/reports/generate/{product_id}` 建立一筆 `reports` 紀錄，狀態先設為 `generating`
+2. API 觸發 `generate_report_task` Celery 任務
+3. 背景任務先補抓該產品在指定日期區間的 FDA Recall / MAUDE 歷史資料
+4. 從資料庫撈出該區間的召回與事件
+5. 統計品牌分布、失效模式、死亡/傷害/故障數量
+6. 呼叫 Gemini 生成批次摘要與最終 HTML 報告
+7. 回寫 `reports.report_html`、`stats_json`、`total_records_analyzed`
+8. 完成後把狀態改回 `draft`，等待人工審核或下載
+
+## 主要資料表
+
+實務上最重要的是以下幾張表：
+
+- `products`
+  - 監控對象定義
+- `recalls`
+  - FDA / TFDA 召回與警訊
+- `adverse_events`
+  - FDA MAUDE 不良事件
+- `standards`
+  - 標準追蹤清單與版本狀態
+- `alerts`
+  - 系統告警與未讀提醒
+- `reports`
+  - AI 報告與簽核狀態
+- `crawl_logs`
+  - 每次爬蟲執行結果
+- `audit_log`
+  - 稽核軌跡
+
+## 技術架構
+
+| 元件 | 技術 |
+| --- | --- |
+| Backend API | FastAPI |
+| Scheduler | APScheduler |
+| Async Worker | Celery |
+| Queue / Broker | Redis |
+| Frontend | React + Vite |
+| Database | SQLite 或 PostgreSQL |
+| AI | Google Gemini |
+| Monitoring | Prometheus |
+
+## 實際部署與啟動方式
+
+### Docker Compose 服務
+
+`docker-compose.yml` 目前會啟動：
+
+- `postgres`
+- `redis`
+- `backend`
+- `celery_worker`
+- `frontend`
+- `prometheus`
+
+### 環境變數
+
+目前 Compose 設定是從 `backend/.env` 載入，不是根目錄 `.env`。
+
+最少請準備：
+
+```env
+GEMINI_API_KEY_1=your_key
+FDA_API_KEY=optional
+DATABASE_URL=postgresql://medwatch_user:medwatch_password@postgres:5432/medwatch
+REDIS_URL=redis://redis:6379/0
+ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ```
 
----
+補充說明：
 
-## 🤝 貢獻指南
+- 若 `DATABASE_URL` 沒有設定，後端會退回使用 `backend/data/monitor.db` 的 SQLite
+- `backend/config.py` 內的 `DATABASE_URL` 常數只是預設字串，真正連線是否使用 PostgreSQL，是由 `backend/database.py` 讀環境變數決定
 
-我們非常歡迎社群參與！您可以透過以下方式貢獻：
-- 提交 Bug Report 或 Feature Request。
-- 改善 AI Prompt 以提升報告的專業度。
-- 增加新的爬蟲來源（如歐盟 EUDAMED）。
+### 本機啟動
 
-請先閱讀 `CONTRIBUTING.md` (Coming soon) 以了解詳情。
+```bash
+chmod +x restart_system.command
+./restart_system.command
+```
 
----
+啟動後可使用：
 
-## 📄 授權協議
+- Frontend: `http://localhost:5173`
+- Backend API: `http://localhost:8000`
+- Swagger: `http://localhost:8000/docs`
+- Prometheus: `http://localhost:9090`
 
-本專案採用 **MIT License** 授權。您可以自由使用、修改與發布，但請保留原作者署名。
+## 建議使用流程
 
----
+第一次使用建議照這個順序：
 
-> **Disclaimer**: 本工具生成的報告僅供參考，所有醫療器材上市後監管決策仍應由具備資格之法規或品質管理人員簽核。
+1. 啟動整套系統
+2. 到 `Products` 新增監控產品
+3. 填入關鍵字與 FDA product code
+4. 透過 API 手動觸發一次爬蟲，或等待排程執行
+5. 在 `Dashboard / Recalls / Events` 確認資料是否進來
+6. 到 `Reports` 對指定產品與日期區間生成 AI 報告
+
+常用 API：
+
+- `GET /api/health`
+- `POST /api/crawl/{crawler_name}`
+- `GET /api/crawl/logs`
+- `GET /api/dashboard`
+- `GET /api/reports`
+
+其中 `crawler_name` 可為：
+
+- `fda_recall`
+- `fda_maude`
+- `tfda`
+- `standards`
+- `all`
