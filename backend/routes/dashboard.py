@@ -1,7 +1,7 @@
 """Dashboard 總覽 API"""
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request, Header
 from typing import Optional
-from database import get_db
+from database import get_db, write_audit_log
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
@@ -122,13 +122,18 @@ def list_alerts(
 
 
 @router.put("/alerts/{alert_id}/read")
-def mark_alert_read(alert_id: int):
-    """標記提醒已讀"""
+def mark_alert_read(alert_id: int, request: Request, x_operator: Optional[str] = Header(None)):
+    """標記提醒已讀（含 Audit Trail）"""
+    operator = x_operator or "system"
+    ip = request.client.host if request.client else None
     conn = get_db()
     try:
         conn.execute(
-            "UPDATE alerts SET is_read = 1 WHERE id = ?", (alert_id,)
+            "UPDATE alerts SET is_read = 1, read_at = datetime('now'), read_by = ? WHERE id = ?",
+            (operator, alert_id)
         )
+        write_audit_log(conn, operator, "ALERT_MARK_READ", "alerts",
+                        target_id=alert_id, ip_address=ip)
         conn.commit()
         return {"message": "已標記為已讀"}
     finally:
@@ -136,12 +141,19 @@ def mark_alert_read(alert_id: int):
 
 
 @router.put("/alerts/read-all")
-def mark_all_alerts_read():
-    """標記所有提醒已讀"""
+def mark_all_alerts_read(request: Request, x_operator: Optional[str] = Header(None)):
+    """標記所有提醒已讀（含 Audit Trail）"""
+    operator = x_operator or "system"
+    ip = request.client.host if request.client else None
     conn = get_db()
     try:
-        conn.execute("UPDATE alerts SET is_read = 1 WHERE is_read = 0")
+        # 取得即將標記的數量
+        count_row = conn.execute("SELECT COUNT(*) as cnt FROM alerts WHERE is_read = 0").fetchone()
+        affected = count_row["cnt"] if count_row else 0
+        conn.execute("UPDATE alerts SET is_read = 1, read_at = datetime('now'), read_by = ? WHERE is_read = 0", (operator,))
+        write_audit_log(conn, operator, "ALERT_MARK_ALL_READ", "alerts",
+                        new_value=str(affected), ip_address=ip)
         conn.commit()
-        return {"message": "所有提醒已標記為已讀"}
+        return {"message": f"已標記 {affected} 則提醒為已讀"}
     finally:
         conn.close()

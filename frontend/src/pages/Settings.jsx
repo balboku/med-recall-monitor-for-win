@@ -32,6 +32,13 @@ export default function Settings() {
     refetchInterval: 5000,
   });
 
+  // #16: 即時健康狀態
+  const { data: healthData } = useQuery({
+    queryKey: ['health'],
+    queryFn: api.getHealth,
+    refetchInterval: 30000,
+  });
+
   const handleCrawl = async (name, historical = false) => {
     const key = historical ? `${name}_hist` : name;
     setCrawling((prev) => ({ ...prev, [key]: true }));
@@ -283,11 +290,17 @@ export default function Settings() {
         
         <div style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid var(--white-10)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-             <CheckCircle2 size={12} className="text-accent-success" /> 所有系統服務運行正常
+             {healthData?.status === 'ok' ? (
+               <><CheckCircle2 size={12} className="text-accent-success" /> 所有系統服務運行正常 (召回: {healthData.data_summary?.total_recalls ?? '...'}, 事件: {healthData.data_summary?.total_adverse_events ?? '...'})</>
+             ) : (
+               <><AlertCircle size={12} className="text-accent-warning" /> 系統狀態查詢中...</>
+             )}
           </div>
-          <a href="#" className="btn btn-ghost btn-sm" style={{ fontSize: '0.72rem' }}>
-            查看更詳細的技術文檔 <ChevronRight size={14} />
-          </a>
+          {healthData?.unread_failure_alerts > 0 && (
+            <span style={{ fontSize: '0.75rem', color: 'var(--accent-danger)', fontWeight: 600 }}>
+              ⚠️ {healthData.unread_failure_alerts} 則未讀爬蟲失敗告警
+            </span>
+          )}
         </div>
       </div>
     </div>

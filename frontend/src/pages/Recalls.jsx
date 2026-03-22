@@ -1,14 +1,26 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import DOMPurify from 'dompurify';
 import { api } from '../api';
 
 export default function Recalls() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [source, setSource] = useState('');
   const [classification, setClassification] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+
+  // #4: debounce 即時搜尋
+  const debounceTimer = useRef(null);
+  useEffect(() => {
+    debounceTimer.current = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 400);
+    return () => clearTimeout(debounceTimer.current);
+  }, [search]);
   const [expandedId, setExpandedId] = useState(null);
   const [aiInsights, setAiInsights] = useState({});
   const toggleExpand = (record) => {
@@ -38,10 +50,10 @@ export default function Recalls() {
   };
 
   const { data: pageData, isFetching: loading } = useQuery({
-    queryKey: ['recalls', { page, search, source, classification, startDate, endDate }],
+    queryKey: ['recalls', { page, debouncedSearch, source, classification, startDate, endDate }],
     queryFn: () => {
       const params = { page, page_size: 15 };
-      if (search) params.search = search;
+      if (debouncedSearch) params.search = debouncedSearch;
       if (source) params.source = source;
       if (classification) params.classification = classification;
       if (startDate) params.start_date = startDate;
@@ -62,6 +74,7 @@ export default function Recalls() {
 
   const handleSearch = (e) => {
     e.preventDefault();
+    setDebouncedSearch(search);
     setPage(1);
   };
 
@@ -232,7 +245,7 @@ export default function Recalls() {
                           {aiInsights[r.id] && (
                               <div className="mt-4 p-4 rounded bg-surface-300 ai-report-content text-sm" 
                                    style={{ border: '1px solid var(--border-color)' }}
-                                   dangerouslySetInnerHTML={{ __html: aiInsights[r.id] }} />
+                                   dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(aiInsights[r.id]) }} />
                           )}
                         </div>
                       </td>
@@ -247,12 +260,18 @@ export default function Recalls() {
           {/* Pagination */}
           <div className="pagination">
             <button disabled={page <= 1} onClick={() => setPage(page - 1)}>‹</button>
-            {Array.from({ length: Math.min(pages, 7) }, (_, i) => {
-              const p = pages <= 7 ? i + 1 : Math.max(1, Math.min(page - 3, pages - 6)) + i;
-              return (
+            {(() => {
+              const maxVisible = 7;
+              let start = 1, end = pages;
+              if (pages > maxVisible) {
+                start = Math.max(1, page - Math.floor(maxVisible / 2));
+                end = start + maxVisible - 1;
+                if (end > pages) { end = pages; start = Math.max(1, end - maxVisible + 1); }
+              }
+              return Array.from({ length: end - start + 1 }, (_, i) => start + i).map(p => (
                 <button key={p} className={p === page ? 'active' : ''} onClick={() => setPage(p)}>{p}</button>
-              );
-            })}
+              ));
+            })()}
             <button disabled={page >= pages} onClick={() => setPage(page + 1)}>›</button>
             <span style={{ marginLeft: 12, fontSize: '0.78rem', color: 'var(--text-tertiary)' }}>
               共 {total} 筆

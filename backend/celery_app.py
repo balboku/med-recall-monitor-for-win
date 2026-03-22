@@ -23,20 +23,20 @@ celery_app.conf.update(
 logger = logging.getLogger(__name__)
 
 def _create_failure_alert(crawler_name: str, error: str):
-    """P2-1: 爬蟲失敗時在 alerts 表寫入高嚴重性系統告警"""
+    """P2-1: 爬蟲失敗時在 alerts 表寫入高嚴重性系統告警（SQLite/PostgreSQL 相容）"""
     from database import get_db
     conn = get_db()
     try:
         existing = conn.execute("""
             SELECT id FROM alerts
-            WHERE alert_type='crawler_failure' AND source=%s
-              AND created_at >= NOW() - INTERVAL '1 hour'
+            WHERE alert_type='crawler_failure' AND source=?
+              AND created_at >= datetime('now', '-1 hour')
         """, (crawler_name,)).fetchone()
 
         if not existing:
             conn.execute("""
                 INSERT INTO alerts (alert_type, title, message, source, severity)
-                VALUES (%s, %s, %s, %s, %s)
+                VALUES (?, ?, ?, ?, ?)
             """, (
                 "crawler_failure",
                 f"⚠️ 爬蟲失敗告警: {crawler_name}",
@@ -88,7 +88,7 @@ def run_crawler_task(crawler_name: str, historical: bool = False):
 
 @celery_app.task
 def generate_report_task(report_id: int, product_id: int, start_date: str, end_date: str, operator: str, request_ip: str):
-    """P8: 在背景執行耗時的 AI 報告生成任務"""
+    """P8: 在背景執行耗時的 AI 報告生成任務（拆分短連線避免長期佔用）"""
     import json
     from datetime import datetime
     from database import get_db, write_audit_log
@@ -96,21 +96,23 @@ def generate_report_task(report_id: int, product_id: int, start_date: str, end_d
     from crawlers.fda_recall import FDARecallCrawler
     from crawlers.fda_maude import FDAMaudeCrawler
 
-    # 1. 取得產品資訊
+    # 1. 取得產品資訊（短連線 #1）
     conn = get_db()
-    product = conn.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
-    if not product:
-        conn.execute("UPDATE reports SET report_status='failed' WHERE id=?", (report_id,))
-        conn.commit()
+    try:
+        product = conn.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
+        if not product:
+            conn.execute("UPDATE reports SET report_status='failed' WHERE id=?", (report_id,))
+            conn.commit()
+            return f"Product {product_id} not found"
+        product_dict = dict(product)
+    finally:
         conn.close()
-        return f"Product {product_id} not found"
 
-    product_dict = dict(product)
     start_fmt = start_date.replace("-", "")
     end_fmt = end_date.replace("-", "")
 
     try:
-        # 2. 爬取最新歷史數據 (確保報告是最精準的)
+        # 2. 爬取最新歷史數據（不佔用 DB 連線）
         recall_crawler = FDARecallCrawler()
         maude_crawler = FDAMaudeCrawler()
         
@@ -123,21 +125,25 @@ def generate_report_task(report_id: int, product_id: int, start_date: str, end_d
 
         asyncio.run(_fetch_all())
 
-        # 3. 從資料庫取出紀錄
-        recalls_rows = conn.execute("""
-            SELECT product_description, firm_name, reason, classification, recall_date FROM recalls
-            WHERE product_id = ? AND recall_date >= ? AND recall_date <= ?
-        """, (product_id, start_date, end_date)).fetchall()
+        # 3. 從資料庫取出紀錄（短連線 #2）
+        conn2 = get_db()
+        try:
+            recalls_rows = conn2.execute("""
+                SELECT product_description, firm_name, reason, classification, recall_date FROM recalls
+                WHERE product_id = ? AND recall_date >= ? AND recall_date <= ?
+            """, (product_id, start_date, end_date)).fetchall()
 
-        events_rows = conn.execute("""
-            SELECT event_type, brand_name, manufacturer, event_description, patient_outcome, device_problem FROM adverse_events
-            WHERE product_id = ? AND date_received >= ? AND date_received <= ?
-        """, (product_id, start_date, end_date)).fetchall()
+            events_rows = conn2.execute("""
+                SELECT event_type, brand_name, manufacturer, event_description, patient_outcome, device_problem FROM adverse_events
+                WHERE product_id = ? AND date_received >= ? AND date_received <= ?
+            """, (product_id, start_date, end_date)).fetchall()
 
-        all_events = [dict(e) for e in events_rows]
-        all_recalls = [dict(r) for r in recalls_rows]
+            all_events = [dict(e) for e in events_rows]
+            all_recalls = [dict(r) for r in recalls_rows]
+        finally:
+            conn2.close()
 
-        # 4. 計算統計大項
+        # 4. 計算統計大項（純記憶體運算，不需 DB）
         total_stats = {
             "total_events": len(all_events),
             "total_recalls": len(all_recalls),
@@ -148,7 +154,6 @@ def generate_report_task(report_id: int, product_id: int, start_date: str, end_d
             "failure_modes": {}
         }
 
-        # 統計品牌與故障模式
         brands = {}
         for e in all_events:
             b = e.get("brand_name") or "Unknown"
@@ -169,7 +174,7 @@ def generate_report_task(report_id: int, product_id: int, start_date: str, end_d
             fm[re] = fm.get(re, 0) + 1
         total_stats["failure_modes"] = dict(sorted(fm.items(), key=lambda x: x[1], reverse=True)[:10])
 
-        # 5. 分批 AI 分析 (Map-Reduce)
+        # 5. 分批 AI 分析（不需 DB，純 API 呼叫）
         batch_size = 500
         batch_summaries = []
         
@@ -182,31 +187,37 @@ def generate_report_task(report_id: int, product_id: int, start_date: str, end_d
             batch_json = json.dumps(batch, ensure_ascii=False)
             batch_summaries.append(ai_service.analyze_batch(f"不良事件批次 {i//batch_size + 1}: {batch_json}"))
 
-        # 6. 生成最終報告
+        # 6. 生成最終報告（不需 DB，純 API 呼叫）
         html_report, stats_json = ai_service.generate_product_report(
             product_dict["name"], start_date, end_date, batch_summaries, total_stats
         )
 
-        # 7. 更新資料庫
+        # 7. 更新資料庫（短連線 #3）
         total_records = len(all_events) + len(all_recalls)
-        conn.execute("""
-            UPDATE reports 
-            SET report_html=?, stats_json=?, report_status='draft', 
-                total_records_analyzed=?, model_used=?
-            WHERE id=?
-        """, (html_report, stats_json, total_records, MODEL_NAME, report_id))
-        
-        write_audit_log(conn, operator, "GENERATE_REPORT_COMPLETE", "reports",
-                        target_id=report_id, ip_address=request_ip)
-        conn.commit()
+        conn3 = get_db()
+        try:
+            conn3.execute("""
+                UPDATE reports 
+                SET report_html=?, stats_json=?, report_status='draft', 
+                    total_records_analyzed=?, model_used=?
+                WHERE id=?
+            """, (html_report, stats_json, total_records, MODEL_NAME, report_id))
+            
+            write_audit_log(conn3, operator, "GENERATE_REPORT_COMPLETE", "reports",
+                            target_id=report_id, ip_address=request_ip)
+            conn3.commit()
+        finally:
+            conn3.close()
         logger.info(f"報告 {report_id} 生成完成")
 
     except Exception as e:
         logger.error(f"報告 {report_id} 生成失敗: {e}")
-        conn.execute("UPDATE reports SET report_status='failed' WHERE id=?", (report_id,))
-        conn.commit()
-    finally:
-        conn.close()
+        conn_err = get_db()
+        try:
+            conn_err.execute("UPDATE reports SET report_status='failed' WHERE id=?", (report_id,))
+            conn_err.commit()
+        finally:
+            conn_err.close()
 
     return f"Report {report_id} generated."
 

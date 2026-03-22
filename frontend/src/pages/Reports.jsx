@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import DOMPurify from 'dompurify';
 import { api } from '../api';
 import { 
   FileText, 
@@ -27,6 +28,7 @@ export default function Reports() {
   const [activeReport, setActiveReport] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [showScrollTop, setShowScrollTop] = useState(false);
+  const [filterProduct, setFilterProduct] = useState('');
   const queryClient = useQueryClient();
 
   const { data: products = [] } = useQuery({
@@ -45,7 +47,11 @@ export default function Reports() {
     }
   });
 
-  const reports = Array.isArray(reportsData) ? reportsData : [];
+  const allReports = Array.isArray(reportsData) ? reportsData : [];
+  const reports = useMemo(() => {
+    if (!filterProduct) return allReports;
+    return allReports.filter(r => String(r.product_id) === String(filterProduct));
+  }, [allReports, filterProduct]);
 
   useEffect(() => {
     if (products.length > 0 && !selectedProduct) {
@@ -80,6 +86,21 @@ export default function Reports() {
   const handleGenerate = async () => {
     if (!selectedProduct || !startDate || !endDate) {
       setErrorMsg('請完整填寫產品與日期區間');
+      return;
+    }
+    // #5: 日期合理性驗證
+    if (startDate > endDate) {
+      setErrorMsg('起始日期不可晚於結束日期');
+      return;
+    }
+    const daysDiff = (new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24);
+    if (daysDiff > 1095) {
+      setErrorMsg('分析期間不可超過 3 年（1095 天），請縮小範圍');
+      return;
+    }
+    const today = new Date().toISOString().split('T')[0];
+    if (endDate > today) {
+      setErrorMsg('結束日期不可在未來');
       return;
     }
     setErrorMsg('');
@@ -118,7 +139,16 @@ export default function Reports() {
 
   const handleDelete = async (e, id) => {
     e.stopPropagation();
-    if (window.confirm('確定要刪除這份報告嗎？')) {
+    // #2: 已核准報告不允許刪除
+    const targetReport = allReports.find(r => r.id === id);
+    if (targetReport?.report_status === 'approved') {
+      setErrorMsg('已核准的報告不可刪除。如需廢止，請使用「簽核管理」功能。');
+      return;
+    }
+    const confirmMsg = targetReport?.report_status === 'draft'
+      ? '確定要刪除這份草稿報告嗎？此操作無法復原。'
+      : '確定要刪除這份報告嗎？';
+    if (window.confirm(confirmMsg)) {
       try {
         await deleteMutation.mutateAsync(id);
       } catch {
@@ -190,10 +220,24 @@ export default function Reports() {
         {/* 左側清單 */}
         <div className="lg:col-span-1">
           <div className="glass-card" style={{ padding: '20px', height: 'fit-content' }}>
-            <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-              <Clock size={18} className="text-text-tertiary" />
-              歷史報告 ({reports.length})
-            </h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <h3 className="text-lg font-bold flex items-center gap-2">
+                <Clock size={18} className="text-text-tertiary" />
+                歷史報告 ({reports.length})
+              </h3>
+            </div>
+            {/* #17: 報告列表篩選 */}
+            <select
+              className="form-select"
+              style={{ width: '100%', marginBottom: '12px', fontSize: '0.8rem' }}
+              value={filterProduct}
+              onChange={e => setFilterProduct(e.target.value)}
+            >
+              <option value="">所有產品</option>
+              {products.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
             <div className="space-y-2 overflow-y-auto pr-2" style={{ maxHeight: 'calc(100vh - 350px)' }}>
               {reports.map(r => (
                 <div 
@@ -306,7 +350,7 @@ export default function Reports() {
 
               <div className="glass-card" style={{ background: 'var(--bg-surface)', border: '1px solid var(--glass-border)', padding: '40px' }}>
                 <div 
-                  dangerouslySetInnerHTML={{ __html: activeReport.report_html }} 
+                  dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(activeReport.report_html || '') }} 
                   className="prose prose-invert max-w-none text-sm rich-report-container" 
                 />
               </div>

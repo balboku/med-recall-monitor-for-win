@@ -98,10 +98,10 @@ def recall_stats():
         row = conn.execute("SELECT COUNT(*) as total FROM recalls").fetchone()
         stats["total"] = row["total"]
 
-        # 最近 30 天新增
+        # 最近 30 天（以召回日期為基準，避免歷史補齊數據膨脹）
         row = conn.execute("""
             SELECT COUNT(*) as count FROM recalls
-            WHERE created_at >= datetime('now', '-30 days')
+            WHERE recall_date >= date('now', '-30 days')
         """).fetchone()
         stats["recent_30d"] = row["count"]
 

@@ -9,11 +9,12 @@ export default function Dashboard() {
   const { data: mrmSummary, isLoading: mrmLoading } = useQuery({ queryKey: ['mrmSummary'], queryFn: () => api.getMrmSummary() });
   const { data: trend, isLoading: trendLoading } = useQuery({ queryKey: ['trend'], queryFn: () => api.getTrend('all') });
 
-  const loading = statsLoading || mrmLoading || trendLoading;
-
-  if (loading) {
-    return <div className="loading-overlay"><div className="spinner"></div><span>載入中…</span></div>;
-  }
+  // #7: 骨架屏元件
+  const SkeletonBox = ({ height = '100px', style = {} }) => (
+    <div className="glass-card" style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center', ...style }}>
+      <div className="spinner" style={{ width: 20, height: 20 }}></div>
+    </div>
+  );
 
   // ---- 整理趨勢圖表資料 ----
   const trendMap = {};
@@ -85,25 +86,31 @@ export default function Dashboard() {
           <p className="page-subtitle">針對高風險異常、召回趨勢進行管理與跨域分析</p>
         </div>
         <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', background: 'var(--bg-surface)', padding: '4px 12px', borderRadius: '4px', border: '1px solid var(--glass-border)' }}>
-          報表月份: {mrmSummary?.reporting_month || '未指定'}
+          報表月份: {mrmLoading ? '...' : (mrmSummary?.reporting_month || '未指定')}
         </div>
       </div>
 
       {/* KPI 卡片 (紅綠燈) */}
-      <div className="stat-grid">
-        {statCards.map((s) => (
-          <div key={s.label} className="stat-card" data-color={s.color}>
-            <div className="stat-icon" style={{ opacity: 1, fontSize: '1.2rem' }}>{s.icon}</div>
-            <div className="stat-label">{s.label}</div>
-            <div className="stat-value" style={{ 
-              color: s.color === 'red' ? 'var(--accent-red)' : s.color === 'amber' ? 'var(--accent-amber)' : 'var(--text-primary)' 
-            }}>
-              {s.value}
+      {mrmLoading ? (
+        <div className="stat-grid">
+          {[1,2,3,4].map(i => <SkeletonBox key={i} height="100px" />)}
+        </div>
+      ) : (
+        <div className="stat-grid">
+          {statCards.map((s) => (
+            <div key={s.label} className="stat-card" data-color={s.color}>
+              <div className="stat-icon" style={{ opacity: 1, fontSize: '1.2rem' }}>{s.icon}</div>
+              <div className="stat-label">{s.label}</div>
+              <div className="stat-value" style={{ 
+                color: s.color === 'red' ? 'var(--accent-red)' : s.color === 'amber' ? 'var(--accent-amber)' : 'var(--text-primary)' 
+              }}>
+                {s.value}
+              </div>
+              {s.sub && <div className="stat-sub">{s.sub}</div>}
             </div>
-            {s.sub && <div className="stat-sub">{s.sub}</div>}
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       {/* 圖表區: 趨勢 + 佔比 */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '24px', marginBottom: '24px' }}>
