@@ -49,6 +49,11 @@
 - `CRAWL_INTERVAL_TFDA`
 - `CRAWL_INTERVAL_STANDARDS`
 
+補充：
+
+- `crawl_logs` 會先寫入 `running` 狀態，任務完成後再更新為 `success` 或 `error`
+- `GET /api/system-info` 可回傳目前版本、排程週期、啟用功能與最近爬蟲狀態，供 `Settings` 頁面使用
+
 ### 3. 爬蟲資料流
 
 #### FDA Recall
@@ -87,20 +92,28 @@
 
 - `Dashboard`
   - 顯示 KPI、趨勢、最新爬蟲記錄、未讀告警
+  - 月趨勢、產品排行與最新召回可直接 drill-down 到 `Recalls / Events`
+- `Alerts`
+  - 集中檢視系統告警
+  - 支援未讀、來源、嚴重度篩選與逐筆 / 全部已讀
 - `Products`
   - 建立監控產品
   - 設定關鍵字與 FDA product code
   - 啟用或停用監控
 - `Recalls`
   - 查詢召回資料
+  - 支援 URL 參數篩選、產品篩選與由 Dashboard 帶入條件
 - `Events`
   - 查詢不良事件資料
+  - 支援 URL 參數篩選、產品篩選與由 Dashboard 帶入條件
 - `Standards`
   - 管理追蹤中的法規標準
 - `Reports`
   - 針對選定產品與日期區間產生 AI 報告
+  - 顯示 `generating / draft / approved / superseded / failed` 狀態
+  - 支援簽核、廢止、下載與刪除限制
 - `Settings`
-  - 系統設定頁面
+  - 顯示真實系統資訊、排程週期、最近爬蟲記錄與手動觸發入口
 
 ### 5. AI 報告生成流程
 
@@ -113,7 +126,8 @@
 5. 統計品牌分布、失效模式、死亡/傷害/故障數量
 6. 呼叫 Gemini 生成批次摘要與最終 HTML 報告
 7. 回寫 `reports.report_html`、`stats_json`、`total_records_analyzed`
-8. 完成後把狀態改回 `draft`，等待人工審核或下載
+8. 完成後把狀態改為 `draft`，等待人工審核
+9. 使用者可在 `Reports` 頁面執行簽核或廢止，已核准報告不可直接刪除
 
 ## 主要資料表
 
@@ -203,15 +217,21 @@ chmod +x restart_system.command
 2. 到 `Products` 新增監控產品
 3. 填入關鍵字與 FDA product code
 4. 透過 API 手動觸發一次爬蟲，或等待排程執行
-5. 在 `Dashboard / Recalls / Events` 確認資料是否進來
-6. 到 `Reports` 對指定產品與日期區間生成 AI 報告
+5. 在 `Dashboard` 先確認 KPI、最新爬蟲狀態與未讀告警
+6. 需要追查時，從 `Dashboard` 直接點進 `Recalls / Events`
+7. 在 `Alerts` 處理未讀告警，必要時跳轉回資料頁追查
+8. 到 `Reports` 對指定產品與日期區間生成 AI 報告，並進行簽核或廢止管理
 
 常用 API：
 
 - `GET /api/health`
+- `GET /api/system-info`
 - `POST /api/crawl/{crawler_name}`
 - `GET /api/crawl/logs`
 - `GET /api/dashboard`
+- `GET /api/alerts`
+- `PUT /api/alerts/{id}/read`
+- `PUT /api/alerts/read-all`
 - `GET /api/reports`
 
 其中 `crawler_name` 可為：
