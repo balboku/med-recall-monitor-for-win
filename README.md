@@ -197,9 +197,17 @@ ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 
 ### 本機啟動
 
+#### Mac / Linux
 ```bash
 chmod +x restart_system.command
 ./restart_system.command
+```
+
+#### Windows
+直接雙擊執行 `restart_system.bat`。
+或者在 PowerShell / CMD 執行：
+```bash
+./restart_system.bat
 ```
 
 啟動後可使用：
