@@ -217,6 +217,26 @@ chmod +x restart_system.command
 - Swagger: `http://localhost:8000/docs`
 - Prometheus: `http://localhost:9090`
 
+## 同網域分享使用 (LAN Sharing)
+
+若想在同一內網（如辦公室 Wi-Fi）與同事分享系統，請依照以下步驟：
+
+1. **取得您的內網 IP**：
+   在 Windows 的 PowerShell 或 CMD 輸入 `ipconfig`，找到「IPv4 地址」（通常是 `192.168.x.x`）。
+
+2. **更新 CORS 白名單**：
+   修改 `docker-compose.yml` 中的 `ALLOWED_ORIGINS`，加入您的 IP（例如）：
+   ```yaml
+   ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://192.168.1.100:5173
+   ```
+   *注意：修改後需執行 `restart_system.bat` 重新啟動服務。*
+
+3. **開放防火牆埠口**：
+   確保您的 Windows 防火牆允許外部連線至 **5173** (前端) 與 **8000** (後端) 埠口。
+
+4. **提供網址給同事**：
+   請同事在瀏覽器輸入 `http://<您的IP>:5173` 即可開始使用。
+
 ## 建議使用流程
 
 第一次使用建議照這個順序：
