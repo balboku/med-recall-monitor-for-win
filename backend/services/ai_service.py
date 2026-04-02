@@ -3,11 +3,11 @@ import time
 import json
 import logging
 from typing import Tuple, Optional
-from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from env_loader import load_environment
 
-load_dotenv()
+load_environment()
 
 logger = logging.getLogger(__name__)
 

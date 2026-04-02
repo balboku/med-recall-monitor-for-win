@@ -1,5 +1,44 @@
 # Med-Recall-Monitor
 
+## Local Run (No Docker)
+
+This project can now run directly on your machine without Docker.
+
+### Windows
+
+Run:
+
+```bat
+.\restart_system.bat
+```
+
+### Mac / Linux
+
+Run:
+
+```bash
+chmod +x restart_system.command
+./restart_system.command
+```
+
+### What the local script does
+
+If you need AI report generation, create `backend/.env` from `backend/.env.example` and fill in your Gemini keys.
+
+- Creates `backend/.venv` if needed
+- Installs backend dependencies from `backend/requirements-local.txt`
+- Installs frontend dependencies when `frontend/node_modules` is missing
+- Starts FastAPI on `http://localhost:8000`
+- Starts Vite on `http://localhost:5173`
+- Uses `TASK_QUEUE_MODE=local`, so report generation and crawlers do not require Docker, Redis, or a Celery worker
+
+### Optional Docker mode
+
+If you still want the old Docker workflow, use:
+
+- `restart_system_docker.bat`
+- `restart_system_docker.command`
+
 醫療器材監控與 AI 分析系統，整合 FDA Recall、FDA MAUDE、TFDA 安全警訊與標準版本追蹤，提供儀表板、告警、歷史查詢與 AI 報告生成功能。
 
 ## 專案目標

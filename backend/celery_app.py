@@ -2,6 +2,9 @@ import os
 import asyncio
 import logging
 from celery import Celery
+from env_loader import load_environment
+
+load_environment()
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 

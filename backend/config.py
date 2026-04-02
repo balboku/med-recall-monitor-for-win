@@ -1,6 +1,9 @@
 """系統設定檔"""
 import os
 from pathlib import Path
+from env_loader import load_environment
+
+load_environment()
 
 BASE_DIR = Path(__file__).resolve().parent
 

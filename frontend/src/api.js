@@ -1,5 +1,5 @@
 /** API 呼叫工具（v2: 含品保優化新端點） */
-const BASE = '/api';
+const BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
 async function request(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {

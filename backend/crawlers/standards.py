@@ -2,8 +2,8 @@
 import re
 import logging
 from datetime import datetime
-from bs4 import BeautifulSoup
 from crawlers.base import BaseCrawler
+from crawlers.html_parser import parse_html
 from database import get_db
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,7 @@ class StandardsCrawler(BaseCrawler):
 
     def _parse_iec_page(self, html: str) -> dict:
         """解析 IEC 標準頁面，擷取版本資訊"""
-        soup = BeautifulSoup(html, "lxml")
+        soup = parse_html(html)
         info = {}
 
         # 嘗試找到版本/版次資訊
@@ -86,7 +86,7 @@ class StandardsCrawler(BaseCrawler):
 
     def _parse_iso_page(self, html: str) -> dict:
         """解析 ISO 標準頁面，擷取版本資訊"""
-        soup = BeautifulSoup(html, "lxml")
+        soup = parse_html(html)
         info = {}
 
         # ISO 頁面結構

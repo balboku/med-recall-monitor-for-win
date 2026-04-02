@@ -2,7 +2,10 @@
 import os
 import sqlite3
 from pathlib import Path
+from env_loader import load_environment
 from config import DATABASE_PATH
+
+load_environment()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 pg_pool = None
@@ -14,12 +17,12 @@ if DATABASE_URL:
         from psycopg2 import pool
         # 增加 maxconn 到 20 應付爬蟲高併發
         pg_pool = pool.SimpleConnectionPool(1, 20, DATABASE_URL)
-        print("✅ 已啟用 PostgreSQL 連線池")
+        print("PostgreSQL connection pool enabled")
     except ImportError:
-        print("⚠️ 未安裝 psycopg2，將回退至 SQLite")
+        print("psycopg2 not installed, falling back to SQLite")
         DATABASE_URL = None
     except Exception as e:
-        print(f"⚠️ 建立 PostgreSQL 連線池失敗: {e}，將回退至 SQLite")
+        print(f"Failed to create PostgreSQL connection pool: {e}. Falling back to SQLite")
         DATABASE_URL = None
 
 
@@ -312,7 +315,7 @@ def init_db():
 
     conn.commit()
     conn.close()
-    print("✅ 資料庫初始化完成（已相容 PostgreSQL）")
+    print("Database initialization completed")
 
 
 def migrate_db():
@@ -375,7 +378,7 @@ def migrate_db():
 
     conn.commit()
     conn.close()
-    print(f"✅ 資料庫遷移完成，執行 {migrated} 項欄位新增（已相容 PostgreSQL）")
+    print(f"Database migration completed, applied {migrated} column updates")
 
 
 def write_audit_log(conn, operator: str, action: str, target_table: str,

@@ -1,75 +1,130 @@
 @echo off
-:: 使用 UTF-8 編碼以顯示中文
 chcp 65001 >nul
-SETLOCAL EnableDelayedExpansion
+setlocal EnableDelayedExpansion
 
-echo --------------------------------------------------------
-echo 🚀 正在準備啟動 Med-Recall-Monitor 醫療器材監控系統 (Windows)...
-echo --------------------------------------------------------
+set "ROOT_DIR=%~dp0"
+if "%ROOT_DIR:~-1%"=="\" set "ROOT_DIR=%ROOT_DIR:~0,-1%"
+set "BACKEND_DIR=%ROOT_DIR%\backend"
+set "FRONTEND_DIR=%ROOT_DIR%\frontend"
+set "VENV_DIR=%BACKEND_DIR%\.venv"
+set "PYTHON_EXE=%VENV_DIR%\Scripts\python.exe"
+set "PYTHON_BOOTSTRAP="
+set "NODE_DIR="
+set "DEPS_MARKER=%VENV_DIR%\\.deps_installed"
 
-:: 檢查 docker 是否安裝
-docker --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [錯誤] 找不到 docker！請確保已安裝 Docker Desktop 並在運行中。
-    echo 官方下載網址: https://www.docker.com/products/docker-desktop/
+where python >nul 2>&1
+if %errorlevel% equ 0 set "PYTHON_BOOTSTRAP=python"
+
+if not defined PYTHON_BOOTSTRAP (
+    where py >nul 2>&1
+    if %errorlevel% equ 0 set "PYTHON_BOOTSTRAP=py -3.11"
+)
+
+if not defined PYTHON_BOOTSTRAP (
+    where py >nul 2>&1
+    if %errorlevel% equ 0 set "PYTHON_BOOTSTRAP=py -3"
+)
+
+if not defined PYTHON_BOOTSTRAP (
+    echo [ERROR] Python was not found. Install Python 3.10+ first.
     pause
     exit /b 1
 )
 
-:: 建立檢測機制，優先使用 docker compose (V2)
-set "DOCKER_CMD=docker compose"
-docker compose version >nul 2>&1
+where npm >nul 2>&1
 if %errorlevel% neq 0 (
-    set "DOCKER_CMD=docker-compose"
-    docker-compose version >nul 2>&1
-    if %errorlevel% neq 0 (
-        echo [錯誤] 找不到 "docker compose" 或 "docker-compose"！
-        echo 請確認 Docker Desktop 已正確安裝並啟動。
+    if exist "C:\Program Files\nodejs\npm.cmd" set "NODE_DIR=C:\Program Files\nodejs"
+)
+
+if not defined NODE_DIR (
+    if not exist "C:\Program Files\nodejs\npm.cmd" (
+        echo [ERROR] npm was not found. Install Node.js 20+ first.
         pause
         exit /b 1
     )
 )
 
-:: 額外檢查 Docker 守護進程 (daemon) 是否正在運行
-!DOCKER_CMD! ps >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [警告] Docker 服務可能尚未完全啟動 (Docker Desktop is unable to start^)。
-    echo 請確認 Docker Desktop 圖示已變為綠色 (Running^)，然後點擊重試。
-    pause
-    exit /b 1
+if defined NODE_DIR (
+    set "PATH=%NODE_DIR%;%PATH%"
 )
 
 echo --------------------------------------------------------
-echo 🚀 正在執行指令: !DOCKER_CMD!
+echo Starting Med Recall Monitor in local mode...
 echo --------------------------------------------------------
 
-:: 1. 停止並移除現有容器
-echo Step 1/3: 正在停止現行服務...
-!DOCKER_CMD! down
+call "%ROOT_DIR%\stop_local_services.bat"
 
-:: 2. 重新編譯並啟動所有服務 (背景執行)
-echo Step 2/3: 正在重新編譯並啟動容器 (背景模式^)...
-!DOCKER_CMD! up -d --build
-if %errorlevel% neq 0 (
-    echo [錯誤] 啟動容器失敗。請檢查 Docker 狀態或網路連線。
-    pause
-    exit /b 1
+if exist "%PYTHON_EXE%" (
+    call "%PYTHON_EXE%" -c "import sys, sysconfig; soabi = sysconfig.get_config_var('SOABI') or ''; raise SystemExit(0 if sys.version_info[:2] <= (3, 13) and 't' not in soabi else 1)" >nul 2>&1
+    if errorlevel 1 (
+        echo [INFO] Existing backend virtual environment uses an incompatible Python build.
+        echo [INFO] Recreating %VENV_DIR% with %PYTHON_BOOTSTRAP% ...
+        rmdir /s /q "%VENV_DIR%"
+    )
 )
 
-:: 3. 檢查服務狀態
-echo Step 3/3: 正在驗證服務狀態...
-timeout /t 5 /nobreak > nul
-echo --------------------------------------------------------
-echo ✅ 系統啟動成功！已啟用熱重載 (Hot-Reload^) 模式。
-echo --------------------------------------------------------
+if not exist "%PYTHON_EXE%" (
+    echo [1/4] Creating backend virtual environment...
+    call %PYTHON_BOOTSTRAP% -m venv "%VENV_DIR%"
+    if errorlevel 1 (
+        echo [ERROR] Failed to create backend virtual environment.
+        pause
+        exit /b 1
+    )
+)
 
-!DOCKER_CMD! ps
+if exist "%DEPS_MARKER%" (
+    echo [2/4] Backend dependencies already present.
+) else (
+    echo [2/4] Installing backend dependencies...
+    call "%PYTHON_EXE%" -m pip install -r "%BACKEND_DIR%\requirements-local.txt"
+    if errorlevel 1 (
+        echo [ERROR] Failed to install backend dependencies.
+        pause
+        exit /b 1
+    )
+    type nul > "%DEPS_MARKER%"
+)
+
+if not exist "%BACKEND_DIR%\.env" (
+    echo [INFO] backend\.env was not found. Copy backend\.env.example if you need AI keys.
+)
+
+if not exist "%FRONTEND_DIR%\node_modules" (
+    echo [3/4] Installing frontend dependencies...
+    pushd "%FRONTEND_DIR%"
+    call npm install
+    set "NPM_EXIT=!errorlevel!"
+    popd
+    if not "%NPM_EXIT%"=="0" (
+        echo [ERROR] Failed to install frontend dependencies.
+        pause
+        exit /b 1
+    )
+) else (
+    echo [3/4] Frontend dependencies already present.
+)
+
+echo [4/4] Launching backend and frontend...
+start "Med Recall Monitor Backend" "%ROOT_DIR%\start_backend_local.bat"
+start "Med Recall Monitor Frontend" "%ROOT_DIR%\start_frontend_local.bat"
 
 echo.
-echo 💡 提示：
-echo    - 前端 (React^): http://localhost:5173
-echo    - 後端 (FastAPI^): http://localhost:8000
-echo    - 查看日誌: !DOCKER_CMD! logs -f
+echo [INFO] Waiting for local services to become ready...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'SilentlyContinue'; $backendReady = $false; $frontendReady = $false; for ($i = 0; $i -lt 60; $i++) { if (-not $backendReady) { try { $resp = Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8000/api/health' -TimeoutSec 2; if ($resp.StatusCode -eq 200) { $backendReady = $true } } catch {} } if (-not $frontendReady) { try { $resp = Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:5173' -TimeoutSec 2; if ($resp.StatusCode -eq 200) { $frontendReady = $true } } catch {} } if ($backendReady -and $frontendReady) { exit 0 } Start-Sleep -Seconds 1 }; exit 1"
+if errorlevel 1 (
+    echo [WARNING] Services were launched, but they did not both report ready within 60 seconds.
+    echo [WARNING] Check the backend and frontend windows for error details.
+) else (
+    start "" "http://localhost:5173"
+    echo [OK] Local services are ready.
+)
+echo Frontend: http://localhost:5173
+echo Backend : http://localhost:8000
+echo Swagger : http://localhost:8000/docs
+echo.
+echo Docker mode is still available via restart_system_docker.bat
 echo --------------------------------------------------------
 
-pause
+echo Press any key to close this launcher window. The app will keep running.
+pause >nul

@@ -42,6 +42,7 @@ services:
     environment:
       # - DATABASE_URL=postgresql://medwatch_user:medwatch_password@postgres:5432/medwatch
       - REDIS_URL=redis://redis:6379/0
+      - TASK_QUEUE_MODE=celery
       # 💡 分享給同事使用時，請在此加上您的電腦 IP (您的 IP 是: 192.168.20.62)
       - ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://192.168.20.62:5173
       - PYTHONPATH=/app
@@ -64,6 +65,7 @@ services:
     environment:
       # - DATABASE_URL=postgresql://medwatch_user:medwatch_password@postgres:5432/medwatch
       - REDIS_URL=redis://redis:6379/0
+      - TASK_QUEUE_MODE=celery
       - PYTHONPATH=/app
     env_file:
       - ./backend/.env
@@ -84,6 +86,8 @@ services:
     container_name: medwatch_frontend
     ports:
       - "5173:5173"
+    environment:
+      - VITE_API_PROXY_TARGET=http://backend:8000
     depends_on:
       - backend
     volumes:

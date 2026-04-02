@@ -2,8 +2,8 @@
 import logging
 import re
 from datetime import datetime
-from bs4 import BeautifulSoup
 from crawlers.base import BaseCrawler
+from crawlers.html_parser import parse_html
 from database import get_db
 from config import TFDA_SAFETY_URL
 
@@ -29,7 +29,7 @@ class TFDACrawler(BaseCrawler):
 
     def _parse_list(self, html: str) -> list:
         """解析警訊列表頁面"""
-        soup = BeautifulSoup(html, "lxml")
+        soup = parse_html(html)
         items = []
 
         # 尋找警訊列表表格
