@@ -142,6 +142,7 @@ class FDAMaudeCrawler(BaseCrawler):
             "device_problem": self._extract_device_problem(item, device),
             "event_description": event_description[:2000],
             "patient_outcome": ", ".join(outcomes),
+            "mdr_report_key": item.get("mdr_report_key", ""),
             "raw_data": json.dumps(item, ensure_ascii=False),
         }
 
@@ -160,15 +161,15 @@ class FDAMaudeCrawler(BaseCrawler):
             conn.execute("""
                 INSERT INTO adverse_events (product_id, source, report_number,
                     event_type, date_received, brand_name, manufacturer,
-                    device_problem, event_description, patient_outcome, raw_data)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    device_problem, event_description, patient_outcome, raw_data, mdr_report_key)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 event_data["product_id"], event_data["source"],
                 event_data["report_number"], event_data["event_type"],
                 event_data["date_received"], event_data["brand_name"],
                 event_data["manufacturer"], event_data["device_problem"],
                 event_data["event_description"], event_data["patient_outcome"],
-                event_data["raw_data"],
+                event_data["raw_data"], event_data["mdr_report_key"],
             ))
             conn.commit()
             return True

@@ -269,10 +269,13 @@ export default function Events() {
                             </p>
                             <div style={{ marginTop: 16, display: 'flex', gap: '10px' }}>
                               <a
-                                href={`https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfmaude/detail.cfm?mdrfoi__id=${encodeURIComponent(event.report_number || '')}`}
+                                href={event.mdr_report_key
+                                  ? `https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfmaude/detail.cfm?mdrfoi__id=${encodeURIComponent(event.mdr_report_key)}`
+                                  : `https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfMAUDE/search.CFM`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="btn btn-secondary btn-sm"
+                                title={event.mdr_report_key ? "檢視原始報告" : "無原始 Key，前往 FDA 搜尋首頁"}
                               >
                                 🔗 檢視 MAUDE 原始來源
                               </a>
