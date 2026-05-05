@@ -18,6 +18,7 @@ from config import (
 )
 from crawlers.standards import StandardsCrawler
 from database import init_db, migrate_db
+from product_manager import sync_to_db
 from env_loader import load_environment
 from routes import analytics, dashboard, events, products, recalls, reports, standards
 from scheduler import init_scheduler, shutdown_scheduler
@@ -46,6 +47,9 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Med Recall Monitor API")
     init_db()
     migrate_db()
+
+    # Sync products from JSON to Database to satisfy existing relational constraints
+    sync_to_db()
 
     StandardsCrawler().init_default_standards()
     init_scheduler()
