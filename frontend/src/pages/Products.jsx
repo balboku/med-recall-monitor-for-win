@@ -2,13 +2,13 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { toast } from 'react-hot-toast';
-import { 
-  Plus, 
-  Edit2, 
-  Trash2, 
-  Search, 
-  ExternalLink, 
-  Package, 
+import {
+  Plus,
+  Edit2,
+  Trash2,
+  Search,
+  ExternalLink,
+  Package,
   X,
   AlertCircle,
   Tag
@@ -116,10 +116,10 @@ export default function Products() {
             <div key={p.id} className="glass-card product-card" style={{ display: 'flex', flexDirection: 'column', padding: '24px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <div style={{ 
-                    width: '44px', 
-                    height: '44px', 
-                    borderRadius: '12px', 
+                  <div style={{
+                    width: '44px',
+                    height: '44px',
+                    borderRadius: '12px',
                     background: p.is_active ? 'var(--accent-blue-glow)' : 'var(--bg-elevated)',
                     display: 'flex',
                     alignItems: 'center',
@@ -144,7 +144,7 @@ export default function Products() {
               </div>
 
               {p.description && (
-                <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '20px', lineHeight: '1.5', flexGrow: 1 }}>
+                <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '20px', lineHeight: '1.5', flexGrow: 1, whiteSpace: 'pre-wrap' }}>
                   {p.description}
                 </p>
               )}
@@ -190,7 +190,7 @@ export default function Products() {
 
       {/* Modal */}
       {showModal && (
-        <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && setShowModal(false)}>
+        <div className="modal-overlay">
           <div className="modal" style={{ maxWidth: '600px' }}>
             <div className="modal-header">
               <h2 style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -237,9 +237,9 @@ export default function Products() {
                     placeholder="例：GEI, LYA"
                     style={{ flex: 1 }}
                   />
-                  <a 
-                    href="https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfPCD/classification.cfm" 
-                    target="_blank" 
+                  <a
+                    href="https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfPCD/classification.cfm"
+                    target="_blank"
                     rel="noopener noreferrer"
                     className="btn btn-secondary btn-sm"
                     title="前往 FDA 官網查詢代碼"
@@ -262,9 +262,9 @@ export default function Products() {
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setShowModal(false)}>取消</button>
-              <button 
-                className="btn btn-primary" 
-                onClick={handleSave} 
+              <button
+                className="btn btn-primary"
+                onClick={handleSave}
                 disabled={!form.name.trim() || mutation.isPending}
               >
                 {mutation.isPending ? '處理中...' : (editing ? '儲存變更' : '開始監控')}
