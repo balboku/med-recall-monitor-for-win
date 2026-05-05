@@ -6,10 +6,16 @@ This project can now run directly on your machine without Docker.
 
 ### Windows
 
-Run:
+啟動系統 (背景無痕執行)：
 
 ```bat
 .\restart_system.bat
+```
+
+關閉系統與釋放資源：
+
+```bat
+.\stop_local_services.bat
 ```
 
 ### Mac / Linux
@@ -243,11 +249,16 @@ chmod +x restart_system.command
 ```
 
 #### Windows
-直接雙擊執行 `restart_system.bat`。
+直接雙擊執行 `restart_system.bat`，系統會於背景隱藏執行。
 或者在 PowerShell / CMD 執行：
 ```bash
-./restart_system.bat
+.\restart_system.bat
 ```
+
+> **注意：** 由於伺服器是在背景「無痕」執行，若要完全關閉系統釋放資源，請勿只關閉啟動視窗，務必要執行以下指令或直接雙擊該腳本：
+> ```bash
+> .\stop_local_services.bat
+> ```
 
 啟動後可使用：
 

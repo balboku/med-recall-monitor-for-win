@@ -7,6 +7,8 @@ from importlib.metadata import PackageNotFoundError, version as package_version
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional, List
 
 from config import (
     CRAWL_INTERVAL_FDA_MAUDE,
@@ -194,8 +196,15 @@ def get_system_info():
     }
 
 
+class CrawlRequest(BaseModel):
+    historical: bool = False
+    product_ids: Optional[List[int]] = None
+
 @app.post("/api/crawl/{crawler_name}")
-async def trigger_crawl(crawler_name: str, historical: bool = False):
+async def trigger_crawl(crawler_name: str, payload: Optional[CrawlRequest] = None):
+    historical = payload.historical if payload else False
+    product_ids = payload.product_ids if payload else None
+
     valid_crawlers = ["fda_recall", "fda_maude", "tfda", "standards", "all"]
     if crawler_name not in valid_crawlers:
         raise HTTPException(status_code=404, detail=f"Unknown crawler: {crawler_name}")
@@ -203,29 +212,33 @@ async def trigger_crawl(crawler_name: str, historical: bool = False):
     if crawler_name == "all":
         mode = None
         for name in ["fda_recall", "fda_maude", "tfda", "standards"]:
-            mode = enqueue_crawler(name, historical)
+            mode = enqueue_crawler(name, historical, product_ids)
             logger.info(
-                "Triggered crawler=%s historical=%s via %s",
+                "Triggered crawler=%s historical=%s product_ids=%s via %s",
                 name,
                 historical,
+                product_ids,
                 mode,
             )
         return {
             "message": "All crawlers have been queued.",
             "historical": historical,
+            "product_ids": product_ids,
             "dispatch_mode": mode,
         }
 
-    mode = enqueue_crawler(crawler_name, historical)
+    mode = enqueue_crawler(crawler_name, historical, product_ids)
     logger.info(
-        "Triggered crawler=%s historical=%s via %s",
+        "Triggered crawler=%s historical=%s product_ids=%s via %s",
         crawler_name,
         historical,
+        product_ids,
         mode,
     )
     return {
         "message": f"Crawler {crawler_name} has been queued.",
         "historical": historical,
+        "product_ids": product_ids,
         "dispatch_mode": mode,
     }
 

@@ -55,7 +55,7 @@ echo --------------------------------------------------------
 call "%ROOT_DIR%\stop_local_services.bat"
 
 if exist "%PYTHON_EXE%" (
-    call "%PYTHON_EXE%" -c "import sys, sysconfig; soabi = sysconfig.get_config_var('SOABI') or ''; raise SystemExit(0 if sys.version_info[:2] <= (3, 13) and 't' not in soabi else 1)" >nul 2>&1
+    call "%PYTHON_EXE%" -c "import sys, sysconfig; soabi = sysconfig.get_config_var('SOABI') or ''; raise SystemExit(0 if sys.version_info[:2] <= (3, 15) and 't' not in soabi else 1)" >nul 2>&1
     if errorlevel 1 (
         echo [INFO] Existing backend virtual environment uses an incompatible Python build.
         echo [INFO] Recreating %VENV_DIR% with %PYTHON_BOOTSTRAP% ...
@@ -96,7 +96,7 @@ if not exist "%FRONTEND_DIR%\node_modules" (
     call npm install
     set "NPM_EXIT=!errorlevel!"
     popd
-    if not "%NPM_EXIT%"=="0" (
+    if not "!NPM_EXIT!"=="0" (
         echo [ERROR] Failed to install frontend dependencies.
         pause
         exit /b 1
@@ -105,9 +105,9 @@ if not exist "%FRONTEND_DIR%\node_modules" (
     echo [3/4] Frontend dependencies already present.
 )
 
-echo [4/4] Launching backend and frontend...
-start "Med Recall Monitor Backend" "%ROOT_DIR%\start_backend_local.bat"
-start "Med Recall Monitor Frontend" "%ROOT_DIR%\start_frontend_local.bat"
+echo [4/4] Launching backend and frontend into the background...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%ROOT_DIR%\start_backend_local.bat' -WindowStyle Hidden"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%ROOT_DIR%\start_frontend_local.bat' -WindowStyle Hidden"
 
 echo.
 echo [INFO] Waiting for local services to become ready...

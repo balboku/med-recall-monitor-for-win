@@ -178,11 +178,11 @@ class FDARecallCrawler(BaseCrawler):
 
         return total_processed
 
-    async def run(self, **kwargs):
+    async def run(self, historical: bool = False, product_ids: list = None, **kwargs):
         """Run the scheduled FDA recall crawler."""
         started_at = datetime.now().isoformat()
         log_id = self.start_crawl_log(started_at)
-        products = self.get_active_products()
+        products = self.get_active_products(product_ids)
         total_found = 0
         total_new = 0
         product_errors: list[str] = []

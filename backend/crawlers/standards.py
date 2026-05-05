@@ -231,7 +231,7 @@ class StandardsCrawler(BaseCrawler):
         finally:
             conn.close()
 
-    async def run(self, **kwargs):
+    async def run(self, historical: bool = False, product_ids: list = None, **kwargs):
         """執行標準版本檢查"""
         started_at = datetime.now().isoformat()
         log_id = self.start_crawl_log(started_at)

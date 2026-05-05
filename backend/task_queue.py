@@ -46,15 +46,15 @@ def _log_future_result(future: Future) -> None:
         logger.exception("Local background task failed")
 
 
-def enqueue_crawler(crawler_name: str, historical: bool = False) -> str:
+def enqueue_crawler(crawler_name: str, historical: bool = False, product_ids: Optional[list] = None) -> str:
     from celery_app import run_crawler_task
 
     mode = get_task_queue_mode()
     if mode == "celery":
-        run_crawler_task.delay(crawler_name, historical)
+        run_crawler_task.delay(crawler_name, historical, product_ids)
         return mode
 
-    future = _get_local_executor().submit(run_crawler_task, crawler_name, historical)
+    future = _get_local_executor().submit(run_crawler_task, crawler_name, historical, product_ids)
     future.add_done_callback(_log_future_result)
     return mode
 

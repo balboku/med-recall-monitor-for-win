@@ -204,11 +204,11 @@ class FDAMaudeCrawler(BaseCrawler):
             
         return total_processed
 
-    async def run(self, historical: bool = False, **kwargs) -> Dict[str, int]:
+    async def run(self, historical: bool = False, product_ids: list = None, **kwargs) -> Dict[str, int]:
         """執行 MAUDE 不良事件爬蟲，historical=True 時採用分年抓取全量資料"""
         started_at = datetime.now().isoformat()
         log_id = self.start_crawl_log(started_at)
-        products = self.get_active_products()
+        products = self.get_active_products(product_ids)
         total_found: int = 0
         total_new: int = 0
 

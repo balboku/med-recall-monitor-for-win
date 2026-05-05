@@ -17,6 +17,7 @@ import {
   Server,
   ShieldAlert,
   Terminal,
+  X,
 } from 'lucide-react';
 
 const crawlerMeta = {
@@ -61,6 +62,13 @@ function formatTime(value) {
 export default function Settings() {
   const queryClient = useQueryClient();
   const [crawling, setCrawling] = useState({});
+  const [modalState, setModalState] = useState({ open: false, crawler: null });
+  const [selectedProductIds, setSelectedProductIds] = useState(new Set());
+
+  const { data: products = [] } = useQuery({
+    queryKey: ['products'],
+    queryFn: api.getProducts,
+  });
 
   const { data: crawlLogs = [], isFetching: loading } = useQuery({
     queryKey: ['crawlLogs'],
@@ -80,11 +88,12 @@ export default function Settings() {
     refetchInterval: 60000,
   });
 
-  const handleCrawl = async (name, historical = false) => {
+  const handleCrawl = async (name, options = {}) => {
+    const historical = options.historical || false;
     const key = historical ? `${name}_hist` : name;
     setCrawling((prev) => ({ ...prev, [key]: true }));
     try {
-      await api.triggerCrawl(name, historical);
+      await api.triggerCrawl(name, options);
       toast.success(`已在背景啟動 ${name} ${historical ? '歷史補抓' : '更新'} 任務`);
       queryClient.invalidateQueries({ queryKey: ['crawlLogs'] });
       queryClient.invalidateQueries({ queryKey: ['health'] });
@@ -188,7 +197,10 @@ export default function Settings() {
                 {(crawler.name === 'fda_maude' || crawler.name === 'fda_recall') && (
                   <button
                     className="btn btn-ghost w-full justify-center"
-                    onClick={() => handleCrawl(crawler.name, true)}
+                    onClick={() => {
+                      setModalState({ open: true, crawler: crawler.name });
+                      setSelectedProductIds(new Set(products.map(p => p.id)));
+                    }}
                     disabled={crawling[`${crawler.name}_hist`]}
                     style={{ fontSize: '0.8rem', border: '1px solid var(--glass-border)' }}
                   >
@@ -300,6 +312,73 @@ export default function Settings() {
           )}
         </div>
       </div>
+
+      {/* Product Select Modal */}
+      {modalState.open && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+        }}>
+          <div className="glass-card" style={{ width: '400px', maxWidth: '90vw', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-primary)' }}>選擇歷史補抓之產品</h3>
+              <button
+                onClick={() => setModalState({ open: false, crawler: null })}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
+              請勾選要進行歷史大範圍資料抓取的產品。這將有助於專注特定產品並避免系統過載。
+            </p>
+
+            <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid var(--glass-border)', borderRadius: '8px', padding: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {products.length === 0 ? (
+                <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-tertiary)' }}>尚無啟用中的產品</div>
+              ) : (
+                products.map(p => (
+                  <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px', cursor: 'pointer', borderRadius: '4px', background: 'rgba(255,255,255,0.02)' }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedProductIds.has(p.id)}
+                      onChange={(e) => {
+                        const newSet = new Set(selectedProductIds);
+                        if (e.target.checked) newSet.add(p.id);
+                        else newSet.delete(p.id);
+                        setSelectedProductIds(newSet);
+                      }}
+                      style={{ width: '16px', height: '16px', accentColor: 'var(--accent-blue)', cursor: 'pointer' }}
+                    />
+                    <span style={{ color: 'var(--text-primary)', fontSize: '0.9rem' }}>{p.name}</span>
+                  </label>
+                ))
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
+              <button
+                className="btn btn-secondary flex-1 justify-center"
+                onClick={() => setModalState({ open: false, crawler: null })}
+              >
+                取消
+              </button>
+              <button
+                className="btn btn-primary flex-1 justify-center"
+                onClick={() => {
+                  handleCrawl(modalState.crawler, { historical: true, productIds: Array.from(selectedProductIds) });
+                  setModalState({ open: false, crawler: null });
+                }}
+                disabled={selectedProductIds.size === 0}
+              >
+                確認開始
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

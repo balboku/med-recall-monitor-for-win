@@ -62,6 +62,6 @@ export const api = {
   getAuditLog: (params) => request(`/analytics/audit-log?${new URLSearchParams(params)}`),
 
   // Crawl
-  triggerCrawl: (name, historical = false) => request(`/crawl/${name}${historical ? '?historical=true' : ''}`, { method: 'POST' }),
+  triggerCrawl: (name, options = {}) => request(`/crawl/${name}`, { method: 'POST', body: JSON.stringify({ historical: options.historical || false, product_ids: options.productIds || null }) }),
   getCrawlLogs: () => request('/crawl/logs'),
 };

@@ -136,13 +136,16 @@ class BaseCrawler:
         finally:
             conn.close()
 
-    def get_active_products(self) -> List[Dict[str, Any]]:
+    def get_active_products(self, product_ids: Optional[List[int]] = None) -> List[Dict[str, Any]]:
         """取得所有啟用中的監控產品"""
         conn = get_db()
         try:
-            rows = conn.execute(
-                "SELECT * FROM products WHERE is_active = 1"
-            ).fetchall()
+            if product_ids:
+                placeholders = ",".join("?" * len(product_ids))
+                query = f"SELECT * FROM products WHERE is_active = 1 AND id IN ({placeholders})"
+                rows = conn.execute(query, tuple(product_ids)).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM products WHERE is_active = 1").fetchall()
             return [dict(row) for row in rows]
         finally:
             conn.close()

@@ -111,11 +111,11 @@ class TFDACrawler(BaseCrawler):
         finally:
             conn.close()
 
-    async def run(self, **kwargs):
+    async def run(self, historical: bool = False, product_ids: list = None, **kwargs):
         """執行 TFDA 爬蟲"""
         started_at = datetime.now().isoformat()
         log_id = self.start_crawl_log(started_at)
-        products = self.get_active_products()
+        products = self.get_active_products(product_ids)
         total_found = 0
         total_new = 0
 

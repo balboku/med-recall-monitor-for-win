@@ -7,6 +7,6 @@ if exist "C:\Program Files\nodejs\npm.cmd" (
 )
 
 cd /d "%~dp0frontend"
-set "VITE_API_PROXY_TARGET=http://localhost:8000"
+set "VITE_API_PROXY_TARGET=http://127.0.0.1:8000"
 
 call npm run dev -- --host 0.0.0.0
