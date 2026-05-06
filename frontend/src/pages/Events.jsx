@@ -328,6 +328,7 @@ export default function Events() {
           </div>
 
           <div className="pagination">
+            <button disabled={page <= 1} onClick={() => updateParams({ page: 1 }, false)} title="第一頁">«</button>
             <button disabled={page <= 1} onClick={() => updateParams({ page: page - 1 }, false)}>‹</button>
             {(() => {
               const maxVisible = 7;
@@ -348,6 +349,7 @@ export default function Events() {
               ));
             })()}
             <button disabled={page >= pages} onClick={() => updateParams({ page: page + 1 }, false)}>›</button>
+            <button disabled={page >= pages} onClick={() => updateParams({ page: pages }, false)} title="最後一頁">»</button>
             <span style={{ marginLeft: 12, fontSize: '0.78rem', color: 'var(--text-tertiary)' }}>
               共 {total} 筆
             </span>
