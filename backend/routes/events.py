@@ -97,3 +97,72 @@ def event_stats():
         return stats
     finally:
         conn.close()
+
+from pydantic import BaseModel
+
+class TranslationTaskResponse(BaseModel):
+    message: str
+
+@router.post("/translate/start", response_model=TranslationTaskResponse)
+def start_translation_task():
+    import translation_state
+    import celery_app
+    import threading
+    import logging
+    from task_queue import get_task_queue_mode
+
+    if translation_state.is_running():
+        return {"message": "翻譯任務已在執行中"}
+
+    mode = get_task_queue_mode()
+    if mode == "celery":
+        celery_app.run_translate_events_task.delay()
+    else:
+        def _safe_run():
+            try:
+                celery_app._run_translate_events_loop()
+            except Exception as e:
+                logging.getLogger(__name__).error(f"Translation thread crashed: {e}", exc_info=True)
+        t = threading.Thread(target=_safe_run, daemon=True, name="translation-worker")
+        t.start()
+        
+    return {"message": "背景翻譯任務已啟動"}
+
+@router.get("/translate/debug")
+def debug_translation():
+    import translation_state
+    import threading
+    return {
+        "is_running": translation_state.is_running(),
+        "is_stopped": translation_state.is_stopped(),
+        "threads": [t.name for t in threading.enumerate()]
+    }
+
+@router.post("/translate/stop", response_model=TranslationTaskResponse)
+def stop_translation_task():
+    import translation_state
+    translation_state.stop_translation()
+    return {"message": "已成功送出停止翻譯任務的訊號"}
+
+@router.get("/translate/progress")
+def get_translation_progress():
+    conn = get_db()
+    try:
+        import translation_state
+        
+        row_total = conn.execute("SELECT COUNT(*) as cnt FROM adverse_events WHERE event_description IS NOT NULL AND event_description != ''").fetchone()
+        row_pending = conn.execute("SELECT COUNT(*) as cnt FROM adverse_events WHERE event_description_zh IS NULL AND event_description IS NOT NULL AND event_description != ''").fetchone()
+        
+        total = row_total["cnt"]
+        pending = row_pending["cnt"]
+        translated = total - pending
+
+        return {
+            "total": total,
+            "translated": translated,
+            "pending": pending,
+            "is_running": translation_state.is_running()
+        }
+    finally:
+        conn.close()
+

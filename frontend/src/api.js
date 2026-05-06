@@ -64,4 +64,10 @@ export const api = {
   // Crawl
   triggerCrawl: (name, options = {}) => request(`/crawl/${name}`, { method: 'POST', body: JSON.stringify({ historical: options.historical || false, product_ids: options.productIds || null }) }),
   getCrawlLogs: () => request('/crawl/logs'),
+
+  // Tools
+  translateText: (data) => request('/translate', { method: 'POST', body: JSON.stringify(data) }),
+  startTranslationTask: () => request('/events/translate/start', { method: 'POST' }),
+  stopTranslationTask: () => request('/events/translate/stop', { method: 'POST' }),
+  getTranslationProgress: () => request('/events/translate/progress'),
 };

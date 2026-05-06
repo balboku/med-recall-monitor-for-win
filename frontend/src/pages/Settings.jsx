@@ -18,6 +18,7 @@ import {
   ShieldAlert,
   Terminal,
   X,
+  Languages,
 } from 'lucide-react';
 
 const crawlerMeta = {
@@ -87,6 +88,27 @@ export default function Settings() {
     queryFn: api.getSystemInfo,
     refetchInterval: 60000,
   });
+
+  const { data: translationProgress } = useQuery({
+    queryKey: ['translationProgress'],
+    queryFn: api.getTranslationProgress,
+    refetchInterval: 5000,
+  });
+
+  const handleTranslationToggle = async () => {
+    try {
+      if (translationProgress?.is_running) {
+        await api.stopTranslationTask();
+        toast.success("已送出停止翻譯訊號，正在等待當前語句翻譯完成...");
+      } else {
+        await api.startTranslationTask();
+        toast.success("背景翻譯任務已啟動！");
+      }
+      queryClient.invalidateQueries({ queryKey: ['translationProgress'] });
+    } catch (e) {
+      toast.error(`任務切換失敗: ${e.message}`);
+    }
+  };
 
   const handleCrawl = async (name, options = {}) => {
     const historical = options.historical || false;
@@ -281,6 +303,47 @@ export default function Settings() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+      </div>
+
+      <div className="glass-card" style={{ padding: '28px', background: 'var(--bg-secondary)', border: '1px solid var(--glass-border)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
+          <div>
+            <h3 className="text-lg font-bold flex items-center gap-2 mb-2">
+              <Languages size={20} className="text-accent-blue" />
+              背景事件描述全庫翻譯 (離放式)
+            </h3>
+            <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
+              考量到大量逐字翻譯可能遭到來源封鎖，系統將以緩速的背景頻率（每數秒一筆）自動為資料庫進行繁體中文翻譯。如果中斷可以隨時接續。
+            </p>
+          </div>
+          <button
+            className={`btn ${translationProgress?.is_running ? 'btn-ghost' : 'btn-primary'}`}
+            onClick={handleTranslationToggle}
+          >
+            {translationProgress?.is_running ? <><RotateCw size={16} className="spinner" /> 暫停翻譯</> : <><Play size={16} /> 開始背景翻譯</>}
+          </button>
+        </div>
+
+        {translationProgress && (
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '0.85rem' }}>
+              <span>翻譯進度：{translationProgress.translated.toLocaleString()} / {translationProgress.total.toLocaleString()}</span>
+              <span style={{ color: 'var(--text-tertiary)' }}>{(translationProgress.translated / Math.max(translationProgress.total, 1) * 100).toFixed(1)}%</span>
+            </div>
+            <div style={{ width: '100%', height: '8px', background: 'var(--bg-elevated)', borderRadius: '4px', overflow: 'hidden' }}>
+              <div style={{
+                width: `${(translationProgress.translated / Math.max(translationProgress.total, 1) * 100)}%`,
+                height: '100%',
+                background: translationProgress.is_running ? 'var(--accent-blue)' : 'var(--text-tertiary)',
+                transition: 'width 0.5s ease'
+              }} />
+            </div>
+            <div style={{ marginTop: '12px', fontSize: '0.8rem', color: 'var(--text-tertiary)', display: 'flex', gap: '16px' }}>
+              <span>剩餘需翻譯：{translationProgress.pending.toLocaleString()} 筆</span>
+              <span>狀態：{translationProgress.is_running ? <span style={{ color: 'var(--accent-blue)' }}>執行中</span> : '已暫停'}</span>
+            </div>
           </div>
         )}
       </div>

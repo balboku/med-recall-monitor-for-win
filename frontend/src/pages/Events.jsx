@@ -16,6 +16,7 @@ export default function Events() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [expandedId, setExpandedId] = useState(null);
   const [aiInsights, setAiInsights] = useState({});
+  const [translations, setTranslations] = useState({});
   const [searchInput, setSearchInput] = useState(searchParams.get('search') || '');
   const debounceTimer = useRef(null);
 
@@ -64,11 +65,25 @@ export default function Events() {
     queryFn: api.getProducts,
   });
 
+  const translateEventDescription = async (eventId, text) => {
+    if (translations[eventId]) return;
+    setTranslations((prev) => ({ ...prev, [eventId]: '翻譯中...' }));
+    try {
+      const res = await api.translateText({ text, target_lang: 'zh-TW' });
+      setTranslations((prev) => ({ ...prev, [eventId]: res.translatedText }));
+    } catch {
+      setTranslations((prev) => ({ ...prev, [eventId]: '翻譯失敗' }));
+    }
+  };
+
   const toggleExpand = (record) => {
     const isExpanding = expandedId !== record.id;
     setExpandedId(isExpanding ? record.id : null);
     if (isExpanding && record.ai_analysis && !aiInsights[record.id]) {
       setAiInsights((prev) => ({ ...prev, [record.id]: record.ai_analysis }));
+    }
+    if (isExpanding && record.event_description && !translations[record.id]) {
+      translateEventDescription(record.id, record.event_description);
     }
   };
 
@@ -265,8 +280,14 @@ export default function Events() {
                           <div style={{ fontSize: '0.85rem', lineHeight: 1.7 }}>
                             <strong>事件描述：</strong>
                             <p style={{ color: 'var(--text-secondary)', marginTop: 4, whiteSpace: 'pre-wrap' }}>
-                              {event.event_description || '無詳細描述'}
+                              {event.event_description_zh || translations[event.id] || '翻譯中...'}
                             </p>
+                            <details style={{ marginTop: 8 }}>
+                              <summary style={{ fontSize: '0.75rem', cursor: 'pointer', color: 'var(--text-tertiary)' }}>檢視原文 (English)</summary>
+                              <p style={{ color: 'var(--text-tertiary)', marginTop: 4, whiteSpace: 'pre-wrap', fontSize: '0.75rem' }}>
+                                {event.event_description || '無詳細描述'}
+                              </p>
+                            </details>
                             <div style={{ marginTop: 16, display: 'flex', gap: '10px' }}>
                               <a
                                 href={event.mdr_report_key

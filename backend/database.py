@@ -205,6 +205,7 @@ def init_db():
             raw_data TEXT,
             ai_analysis TEXT,
             mdr_report_key TEXT,
+            event_description_zh TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL
         )
@@ -342,6 +343,7 @@ def migrate_db():
         ("ALTER TABLE recalls ADD COLUMN ai_analysis TEXT",),
         ("ALTER TABLE adverse_events ADD COLUMN ai_analysis TEXT",),
         ("ALTER TABLE adverse_events ADD COLUMN mdr_report_key TEXT",),
+        ("ALTER TABLE adverse_events ADD COLUMN event_description_zh TEXT",),
     ]
 
     migrated = 0

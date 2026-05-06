@@ -224,3 +224,72 @@ def generate_report_task(report_id: int, product_id: int, start_date: str, end_d
 
     return f"Report {report_id} generated."
 
+# Translation state is managed in translation_state.py (singleton across all threads)
+
+def _run_translate_events_loop():
+    """The actual translation loop — runs as a plain function so it works both
+    in a daemon thread and as a Celery task body."""
+    import time
+    import random
+    import translation_state
+    from database import get_db
+
+    if not translation_state.start_translation():
+        logger.info("翻譯任務已在背景執行中，略過重複啟動")
+        return
+
+    logger.info("開始背景事件描述翻譯任務")
+
+    try:
+        while not translation_state.is_stopped():
+            conn = get_db()
+            try:
+                rows = conn.execute(
+                    "SELECT id, event_description FROM adverse_events "
+                    "WHERE event_description_zh IS NULL "
+                    "AND event_description IS NOT NULL AND event_description != '' "
+                    "LIMIT 10"
+                ).fetchall()
+            finally:
+                conn.close()
+
+            if not rows:
+                logger.info("已完成全庫事件描述翻譯")
+                break
+
+            for row in rows:
+                if translation_state.is_stopped():
+                    logger.info("背景事件翻譯被指示停止")
+                    return
+
+                record_id = row["id"]
+                en_text = row["event_description"]
+                try:
+                    from deep_translator import GoogleTranslator
+                    translated = GoogleTranslator(source='auto', target='zh-TW').translate(en_text)
+                    upd_conn = get_db()
+                    try:
+                        upd_conn.execute(
+                            "UPDATE adverse_events SET event_description_zh = ? WHERE id = ?",
+                            (translated, record_id)
+                        )
+                        upd_conn.commit()
+                    finally:
+                        upd_conn.close()
+                    logger.debug(f"已翻譯事件描述 ID: {record_id}")
+                except Exception as e:
+                    logger.warning(f"事件描述 ID: {record_id} 翻譯失敗: {e}")
+
+                time.sleep(random.uniform(2, 4))
+
+    except Exception as e:
+        logger.error(f"全庫翻譯任務發生錯誤: {e}", exc_info=True)
+    finally:
+        translation_state.mark_done()
+        logger.info("背景翻譯任務已結束")
+
+
+@celery_app.task
+def run_translate_events_task():
+    _run_translate_events_loop()
+    return "Translation task completed."

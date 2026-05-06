@@ -259,3 +259,37 @@ def get_crawl_logs():
         return [dict(row) for row in rows]
     finally:
         conn.close()
+
+class TranslateRequest(BaseModel):
+    text: str
+    target_lang: str = "zh-TW"
+
+@app.post("/api/translate")
+def translate_text(payload: TranslateRequest):
+    from deep_translator import GoogleTranslator
+    try:
+        if not payload.text or not payload.text.strip():
+            return {"translatedText": ""}
+            
+        translated = GoogleTranslator(source='auto', target=payload.target_lang).translate(payload.text)
+        return {"translatedText": translated}
+    except Exception as e:
+        logger.error(f"Translation failed: {e}")
+        return {"translatedText": payload.text}
+
+class TranslateRequest(BaseModel):
+    text: str
+    target_lang: str = "zh-TW"
+
+@app.post("/api/translate")
+def translate_text(payload: TranslateRequest):
+    from deep_translator import GoogleTranslator
+    try:
+        if not payload.text or not payload.text.strip():
+            return {"translatedText": ""}
+            
+        translated = GoogleTranslator(source='auto', target=payload.target_lang).translate(payload.text)
+        return {"translatedText": translated}
+    except Exception as e:
+        logger.error(f"Translation failed: {e}")
+        return {"translatedText": payload.text}  # 退回原文
