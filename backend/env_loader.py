@@ -8,4 +8,4 @@ ENV_PATH = BASE_DIR / ".env"
 
 
 def load_environment() -> None:
-    load_dotenv(ENV_PATH, override=False)
+    load_dotenv(ENV_PATH, override=True)
