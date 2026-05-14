@@ -70,6 +70,7 @@ export default function Settings() {
   const [selectedProductIds, setSelectedProductIds] = useState(new Set());
   const [announcementText, setAnnouncementText] = useState('');
   const [savingAnnouncement, setSavingAnnouncement] = useState(false);
+  const [logPage, setLogPage] = useState(1);
 
   const { data: products = [] } = useQuery({
     queryKey: ['products'],
@@ -163,6 +164,11 @@ export default function Settings() {
   if (announcementData?.content !== undefined && announcementText === '' && announcementData.content !== '') {
     setAnnouncementText(announcementData.content);
   }
+
+  const totalLogs = crawlLogs.length;
+  const logsPerPage = 20;
+  const totalLogPages = Math.ceil(totalLogs / logsPerPage);
+  const paginatedLogs = crawlLogs.slice((logPage - 1) * logsPerPage, logPage * logsPerPage);
 
   return (
     <div className="space-y-8">
@@ -385,51 +391,83 @@ export default function Settings() {
               <p className="text-text-tertiary">當排程或手動任務啟動後，日誌會顯示在這裡</p>
             </div>
           ) : (
-            <div className="table-container">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>採集引擎</th>
-                    <th>當前狀態</th>
-                    <th style={{ textAlign: 'right' }}>掃描總數</th>
-                    <th style={{ textAlign: 'right' }}>入庫數量</th>
-                    <th>錯誤詳情</th>
-                    <th>開始時間</th>
-                    <th>完成時間</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {crawlLogs.map((log) => {
-                    const meta = statusMeta(log.status);
-                    return (
-                      <tr key={log.id}>
-                        <td style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{log.crawler_name}</td>
-                        <td>
-                          <span className={`tag ${meta.className}`} style={{ display: 'flex', alignItems: 'center', gap: '4px', width: 'fit-content' }}>
-                            {meta.icon} {meta.label}
-                          </span>
-                        </td>
-                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{log.records_found?.toLocaleString() || 0}</td>
-                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>
-                          {log.new_records > 0 ? (
-                            <span style={{ color: 'var(--accent-success)', fontWeight: 700 }}>+{log.new_records}</span>
-                          ) : '0'}
-                        </td>
-                        <td style={{ maxWidth: '220px' }}>
-                          <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.75rem', color: 'var(--accent-danger)' }} title={log.error_message}>
-                            {log.error_message || <span style={{ color: 'var(--text-tertiary)' }}>—</span>}
-                          </div>
-                        </td>
-                        <td style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>{formatTime(log.started_at)}</td>
-                        <td style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
-                          {log.status === 'running' ? '進行中' : formatTime(log.completed_at)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <>
+              <div className="table-container">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>採集引擎</th>
+                      <th>當前狀態</th>
+                      <th style={{ textAlign: 'right' }}>掃描總數</th>
+                      <th style={{ textAlign: 'right' }}>入庫數量</th>
+                      <th>錯誤詳情</th>
+                      <th>開始時間</th>
+                      <th>完成時間</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedLogs.map((log) => {
+                      const meta = statusMeta(log.status);
+                      return (
+                        <tr key={log.id}>
+                          <td style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{log.crawler_name}</td>
+                          <td>
+                            <span className={`tag ${meta.className}`} style={{ display: 'flex', alignItems: 'center', gap: '4px', width: 'fit-content' }}>
+                              {meta.icon} {meta.label}
+                            </span>
+                          </td>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{log.records_found?.toLocaleString() || 0}</td>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>
+                            {log.new_records > 0 ? (
+                              <span style={{ color: 'var(--accent-success)', fontWeight: 700 }}>+{log.new_records}</span>
+                            ) : '0'}
+                          </td>
+                          <td style={{ maxWidth: '220px' }}>
+                            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.75rem', color: 'var(--accent-danger)' }} title={log.error_message}>
+                              {log.error_message || <span style={{ color: 'var(--text-tertiary)' }}>—</span>}
+                            </div>
+                          </td>
+                          <td style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>{formatTime(log.started_at)}</td>
+                          <td style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
+                            {log.status === 'running' ? '進行中' : formatTime(log.completed_at)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {totalLogs > 2 && (
+                <div className="pagination" style={{ marginTop: '16px' }}>
+                  <button disabled={logPage <= 1} onClick={() => setLogPage(1)} title="第一頁">«</button>
+                  <button disabled={logPage <= 1} onClick={() => setLogPage(Math.max(1, logPage - 1))}>‹</button>
+                  {(() => {
+                    const maxVisible = 7;
+                    let start = 1;
+                    let end = totalLogPages;
+                    if (totalLogPages > maxVisible) {
+                      start = Math.max(1, logPage - Math.floor(maxVisible / 2));
+                      end = start + maxVisible - 1;
+                      if (end > totalLogPages) {
+                        end = totalLogPages;
+                        start = Math.max(1, end - maxVisible + 1);
+                      }
+                    }
+                    return Array.from({ length: end - start + 1 }, (_, index) => start + index).map((value) => (
+                      <button key={value} className={value === logPage ? 'active' : ''} onClick={() => setLogPage(value)}>
+                        {value}
+                      </button>
+                    ));
+                  })()}
+                  <button disabled={logPage >= totalLogPages} onClick={() => setLogPage(Math.min(totalLogPages, logPage + 1))}>›</button>
+                  <button disabled={logPage >= totalLogPages} onClick={() => setLogPage(totalLogPages)} title="最後一頁">»</button>
+                  <span style={{ marginLeft: 12, fontSize: '0.78rem', color: 'var(--text-tertiary)' }}>
+                    共 {totalLogs} 筆
+                  </span>
+                </div>
+              )}
+            </>
           )}
         </div>
 

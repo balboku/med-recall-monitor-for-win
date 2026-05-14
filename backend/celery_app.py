@@ -240,7 +240,36 @@ def _run_translate_events_loop():
 
     logger.info("開始背景事件描述翻譯任務")
 
+    import json
+    from pathlib import Path
+    data_dir = Path(__file__).resolve().parent.parent / "data"
+    data_dir.mkdir(exist_ok=True)
+    export_file = data_dir / "translated_events.json"
+
+    def _sync_export():
+        try:
+            logger.info("正在更新翻譯資料輸出...")
+            conn_exp = get_db()
+            try:
+                exp_rows = conn_exp.execute(
+                    "SELECT report_number, event_type, brand_name, manufacturer, event_description, event_description_zh "
+                    "FROM adverse_events WHERE event_description_zh IS NOT NULL AND event_description_zh != ''"
+                ).fetchall()
+                data = [dict(r) for r in exp_rows]
+                
+                tmp_file = export_file.with_suffix('.tmp')
+                with open(tmp_file, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                tmp_file.replace(export_file)
+                logger.info(f"已同步 {len(data)} 筆翻譯資料至 {export_file}")
+            finally:
+                conn_exp.close()
+        except Exception as e:
+            logger.error(f"同步翻譯資料失敗: {e}")
+
     try:
+        _sync_export()
+        
         while not translation_state.is_stopped():
             conn = get_db()
             try:
@@ -281,6 +310,9 @@ def _run_translate_events_loop():
                     logger.warning(f"事件描述 ID: {record_id} 翻譯失敗: {e}")
 
                 time.sleep(random.uniform(2, 4))
+            
+            # 每批次處理完後同步一次檔案
+            _sync_export()
 
     except Exception as e:
         logger.error(f"全庫翻譯任務發生錯誤: {e}", exc_info=True)
