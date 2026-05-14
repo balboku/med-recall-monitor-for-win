@@ -9,6 +9,7 @@ pydantic>=2.10.4
 python-dotenv==1.0.1
 httpx==0.28.1
 google-genai==0.3.0
+deep-translator==1.11.4
 redis==5.0.1
 celery==5.3.6
 prometheus-fastapi-instrumentator==7.0.0

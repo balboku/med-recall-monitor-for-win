@@ -18,5 +18,15 @@
     "is_active": true,
     "created_at": "2026-05-05 07:16:40",
     "updated_at": "2026-05-05T15:57:34.623436"
+  },
+  {
+    "id": 6,
+    "name": "雙極電燒刀",
+    "keywords": "",
+    "fda_product_codes": "PDG,HGI",
+    "description": "TFDA醫療器材級數：第二等級\n醫器主類別：I一班級整形外科手術裝置\n醫器次類別：I4400 \n",
+    "is_active": true,
+    "created_at": "2026-05-06T13:35:23.699702",
+    "updated_at": "2026-05-13T15:39:53.992551"
   }
 ]

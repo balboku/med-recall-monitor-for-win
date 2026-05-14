@@ -267,6 +267,27 @@ chmod +x restart_system.command
 - Swagger: `http://localhost:8000/docs`
 - Prometheus: `http://localhost:9090`
 
+### 更新與排錯 (Troubleshooting)
+
+如果您從 Github 更新了新版的程式碼，卻發現部分新功能（例如背景自動翻譯）點擊後出現 `Not Found` 錯誤，通常是因為 Python 尚未安裝新增的依賴套件。
+請執行以下指令手動安裝缺失的套件：
+
+#### Windows
+```bash
+.\backend\.venv\Scripts\pip install -r .\backend\requirements-local.txt
+# 或者單獨安裝：
+.\backend\.venv\Scripts\pip install deep-translator
+```
+
+#### Mac / Linux
+```bash
+./backend/.venv/bin/pip install -r ./backend/requirements-local.txt
+# 或者單獨安裝：
+./backend/.venv/bin/pip install deep-translator
+```
+
+*(💡 小技巧：另一個最簡單的方法，是直接刪除 `backend/.venv` 資料夾，接著再次執行啟動腳本，系統就會為您自動重建並完整下載所有最新套件。)*
+
 ## 同網域分享使用 (LAN Sharing)
 
 若想在同一內網（如辦公室 Wi-Fi）與同事分享系統，請依照以下步驟：

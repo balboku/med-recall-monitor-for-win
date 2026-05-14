@@ -70,4 +70,8 @@ export const api = {
   startTranslationTask: () => request('/events/translate/start', { method: 'POST' }),
   stopTranslationTask: () => request('/events/translate/stop', { method: 'POST' }),
   getTranslationProgress: () => request('/events/translate/progress'),
+
+  // Announcement
+  getAnnouncement: () => request('/announcement'),
+  saveAnnouncement: (content) => request('/announcement', { method: 'PUT', body: JSON.stringify({ content }) }),
 };

@@ -275,21 +275,39 @@ def translate_text(payload: TranslateRequest):
         return {"translatedText": translated}
     except Exception as e:
         logger.error(f"Translation failed: {e}")
-        return {"translatedText": payload.text}
-
-class TranslateRequest(BaseModel):
-    text: str
-    target_lang: str = "zh-TW"
-
-@app.post("/api/translate")
-def translate_text(payload: TranslateRequest):
-    from deep_translator import GoogleTranslator
-    try:
-        if not payload.text or not payload.text.strip():
-            return {"translatedText": ""}
-            
-        translated = GoogleTranslator(source='auto', target=payload.target_lang).translate(payload.text)
-        return {"translatedText": translated}
-    except Exception as e:
-        logger.error(f"Translation failed: {e}")
         return {"translatedText": payload.text}  # 退回原文
+
+
+@app.get("/api/announcement")
+def get_announcement():
+    from database import get_db
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT value FROM system_settings WHERE key = 'announcement'"
+        ).fetchone()
+        return {"content": row["value"] if row else ""}
+    finally:
+        conn.close()
+
+
+class AnnouncementRequest(BaseModel):
+    content: str
+
+@app.put("/api/announcement")
+def save_announcement(payload: AnnouncementRequest):
+    from database import get_db
+    conn = get_db()
+    try:
+        conn.execute(
+            """
+            INSERT INTO system_settings (key, value, updated_at)
+            VALUES ('announcement', ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (payload.content,)
+        )
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()

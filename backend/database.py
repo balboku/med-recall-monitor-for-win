@@ -301,6 +301,14 @@ def init_db():
         CREATE TABLE IF NOT EXISTS recalls_v2_check (id INTEGER PRIMARY KEY AUTOINCREMENT)
     """)
 
+    _run_ddl(cursor, """
+        CREATE TABLE IF NOT EXISTS system_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT '',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     # 建立索引
     try:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_recalls_source ON recalls(source)")
@@ -368,6 +376,14 @@ def migrate_db():
             new_value TEXT,
             ip_address TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    _run_ddl(cursor, """
+        CREATE TABLE IF NOT EXISTS system_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT '',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     
