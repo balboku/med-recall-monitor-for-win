@@ -19,22 +19,35 @@ class BaseCrawler:
         self.client = httpx.AsyncClient(headers=REQUEST_HEADERS, timeout=REQUEST_TIMEOUT)
         self.timeout = REQUEST_TIMEOUT
         self._last_request_time: float = 0.0
+        self._domain_request_times: Dict[str, float] = {}
         self._min_interval = 1.0  # 最小請求間隔（秒）
 
-    async def _rate_limit(self):
-        """速率限制：確保請求間隔不小於最小間隔"""
-        elapsed = time.time() - self._last_request_time
+    async def _rate_limit(self, domain: Optional[str] = None):
+        """速率限制：依據 domain 確保請求間隔不小於最小間隔"""
+        if not domain:
+            last_time = self._last_request_time
+        else:
+            last_time = self._domain_request_times.get(domain, 0.0)
+
+        elapsed = time.time() - last_time
         if elapsed < self._min_interval:
             await asyncio.sleep(self._min_interval - elapsed)
-        self._last_request_time = time.time()
+            
+        current_time = time.time()
+        if not domain:
+            self._last_request_time = current_time
+        else:
+            self._domain_request_times[domain] = current_time
 
     async def get(self, url: str, params: Optional[Dict[str, Any]] = None) -> httpx.Response:
         """發送 GET 請求，含速率限制與自動重試機制（處理 429/50x 與網路異常）"""
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc
         max_retries = 5
         base_delay = 2.0
         
         for attempt in range(max_retries):
-            await self._rate_limit()
+            await self._rate_limit(domain)
             try:
                 response = await self.client.get(url, params=params)
                 response.raise_for_status()

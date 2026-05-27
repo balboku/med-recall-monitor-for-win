@@ -52,9 +52,9 @@ STANDARD_URLS = {
     "ISO 11137-1": "https://www.iso.org/standard/56137.html",
     "ISO 11737-1": "https://www.iso.org/standard/66457.html",
     "ISO 11737-2": "https://www.iso.org/standard/68208.html",
-    "ISO11737-3": "https://www.iso.org/standard/79140.html",
+    "ISO 11737-3": "https://www.iso.org/standard/79140.html",
     "ISO 17664-1": "https://www.iso.org/standard/67416.html",
-    "ISO17664-2": "https://www.iso.org/standard/80075.html",
+    "ISO 17664-2": "https://www.iso.org/standard/80075.html",
     "ISO 17665": "https://www.iso.org/standard/72820.html",
     "ISO 11607-1": "https://www.iso.org/standard/74956.html",
     "ISO 11607-2": "https://www.iso.org/standard/74957.html",
@@ -64,6 +64,14 @@ STANDARD_URLS = {
     "ISO 10555-1": "https://www.iso.org/standard/56471.html",
     "ISO 11070": "https://www.iso.org/standard/74946.html",
     "ISO 80601-2-55": "https://www.iso.org/standard/80200.html",
+    "ISO 10993-10": "https://www.iso.org/standard/76063.html",
+    "ISO 10993-14": "https://www.iso.org/standard/32338.html",
+    "ISO 10993-17": "https://www.iso.org/standard/74649.html",
+    "ISO 10993-13": "https://www.iso.org/standard/44626.html",
+    "ISO 10993-15": "https://www.iso.org/standard/72051.html",
+    "ISO 10993-11": "https://www.iso.org/standard/60153.html",
+    "ISO 10993-18": "https://www.iso.org/standard/72059.html",
+    "ISO 10993-12": "https://www.iso.org/standard/77402.html",
     # IEC
     "IEC 60601-1": "https://webstore.iec.ch/en/publication/2606",
     "IEC 60601-2-2": "https://webstore.iec.ch/en/publication/62893",
@@ -103,10 +111,15 @@ STANDARD_URLS = {
 
 def get_source_url(standard_name: str) -> str:
     """根據法規標準名稱，從對應表中找到最適合的官方網址"""
-    # 完全比對或前綴比對
-    for key, url in STANDARD_URLS.items():
+    # 按照長度遞減排序，確保長字串（如 ISO 10993-10）優先比對
+    sorted_keys = sorted(STANDARD_URLS.keys(), key=len, reverse=True)
+    for key in sorted_keys:
         if standard_name.startswith(key):
-            return url
+            # 確保不會發生 `ISO 10993-1` 錯誤匹配到 `ISO 10993-10` 的情況
+            # 也就是 key 的下個字元不能是數字
+            next_char = standard_name[len(key):len(key)+1]
+            if not next_char or not next_char.isdigit():
+                return STANDARD_URLS[key]
     return ""
 
 def get_category(company_code: str) -> str:

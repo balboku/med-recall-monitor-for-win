@@ -151,6 +151,17 @@ export default function Standards() {
     },
   });
 
+  // Derive unique categories from 'notes' field (hook must be before early return)
+  const categories = useMemo(() => {
+    const cats = new Set(standards.map(s => s.notes).filter(n => n && typeof n === 'string'));
+    return Array.from(cats).sort();
+  }, [standards]);
+
+  const filteredStandards = useMemo(() => {
+    if (filterCategory === 'all') return standards;
+    return standards.filter(s => s.notes === filterCategory);
+  }, [standards, filterCategory]);
+
   const openNew = () => { setEditing(null); setForm(emptyForm); setShowModal(true); };
   const openEdit = (s) => {
     setEditing(s);
@@ -191,17 +202,6 @@ export default function Standards() {
       </div>
     );
   }
-
-  // Derive unique categories from 'notes' field
-  const categories = useMemo(() => {
-    const cats = new Set(standards.map(s => s.notes).filter(n => n && typeof n === 'string'));
-    return Array.from(cats).sort();
-  }, [standards]);
-
-  const filteredStandards = useMemo(() => {
-    if (filterCategory === 'all') return standards;
-    return standards.filter(s => s.notes === filterCategory);
-  }, [standards, filterCategory]);
 
   // Sorting: Prioritize updates, then natural order (Windows folder style) by title
   const sortedStandards = [...filteredStandards].sort((a, b) => {

@@ -254,37 +254,59 @@ class StandardsCrawler(BaseCrawler):
         logger.info(f"[{self.name}] 開始檢查 {len(standards)} 個標準")
 
         try:
+            from collections import defaultdict
+            from urllib.parse import urlparse
+            import asyncio
+            
+            domain_groups = defaultdict(list)
             for std in standards:
                 source_url = std.get("source_url", "")
-                if not source_url:
-                    continue
+                if source_url:
+                    domain = urlparse(source_url).netloc
+                    domain_groups[domain].append(std)
 
-                latest_info = await self._check_standard(std["standard_number"], source_url)
-                total_checked += 1
+            async def process_group(domain, stds):
+                grp_checked = 0
+                grp_updated = 0
+                for std in stds:
+                    latest_info = await self._check_standard(std["standard_number"], std["source_url"])
+                    grp_checked += 1
 
-                if latest_info:
-                    updated = self._update_standard(std["id"], latest_info)
-                    if updated:
-                        total_updated += 1
-                        has_update_val = self._is_under_revision(latest_info.get("status", ""))
-                        alert_msg = (
-                            f"標準 {std['standard_number']} 進入修訂中狀態，請關注後續版本發布"
-                            if has_update_val
-                            else f"最新版本: {latest_info.get('version', 'N/A')}"
-                        )
-                        alert_title = (
-                            f"⚠️ 標準修訂中: {std['standard_number']}"
-                            if has_update_val
-                            else f"📋 標準更新: {std['standard_number']}"
-                        )
-                        self.create_alert(
-                            alert_type="standard_update",
-                            title=alert_title,
-                            message=alert_msg,
-                            source="IEC/ISO",
-                            reference_id=std["id"],
-                            reference_table="standards",
-                        )
+                    if latest_info:
+                        updated = self._update_standard(std["id"], latest_info)
+                        if updated:
+                            grp_updated += 1
+                            has_update_val = self._is_under_revision(latest_info.get("status", ""))
+                            alert_msg = (
+                                f"標準 {std['standard_number']} 進入修訂中狀態，請關注後續版本發布"
+                                if has_update_val
+                                else f"最新版本: {latest_info.get('version', 'N/A')}"
+                            )
+                            alert_title = (
+                                f"⚠️ 標準修訂中: {std['standard_number']}"
+                                if has_update_val
+                                else f"📋 標準更新: {std['standard_number']}"
+                            )
+                            self.create_alert(
+                                alert_type="standard_update",
+                                title=alert_title,
+                                message=alert_msg,
+                                source="IEC/ISO",
+                                reference_id=std["id"],
+                                reference_table="standards",
+                            )
+                return grp_checked, grp_updated
+
+            logger.info(f"[{self.name}] 正在並行處理 {len(domain_groups)} 個網站來源...")
+            tasks = [process_group(domain, stds) for domain, stds in domain_groups.items()]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for res in results:
+                if isinstance(res, tuple):
+                    total_checked += res[0]
+                    total_updated += res[1]
+                elif isinstance(res, Exception):
+                    logger.error(f"[{self.name}] 站點群組處理時發生錯誤: {res}")
 
             self.finish_crawl_log(log_id, "success", total_checked, total_updated)
             logger.info(f"[{self.name}] 完成: 檢查 {total_checked} 個，更新 {total_updated} 個")
