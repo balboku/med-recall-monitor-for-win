@@ -1,27 +1,139 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { toast } from 'react-hot-toast';
-import { 
-  Plus, 
-  Edit2, 
-  Trash2, 
-  Globe, 
-  CheckCircle, 
-  RotateCcw, 
+import {
+  Plus,
+  Edit2,
+  Trash2,
+  Globe,
+  CheckCircle,
+  RotateCcw,
   X,
   Info,
   AlertCircle,
-  ExternalLink
+  ExternalLink,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight
 } from 'lucide-react';
 
 const emptyForm = { standard_number: '', title: '', current_version: '', source_url: '', notes: '' };
+
+function Pagination({ currentPage, totalPages, onPageChange }) {
+  const [jumpPage, setJumpPage] = useState('');
+
+  const getPageNumbers = () => {
+    const pages = [];
+    if (totalPages <= 10) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+    } else {
+      if (currentPage <= 6) {
+        for (let i = 1; i <= 8; i++) pages.push(i);
+        pages.push('...', totalPages);
+      } else if (currentPage >= totalPages - 5) {
+        pages.push(1, '...');
+        for (let i = totalPages - 7; i <= totalPages; i++) pages.push(i);
+      } else {
+        pages.push(1, '...');
+        for (let i = currentPage - 2; i <= currentPage + 2; i++) pages.push(i);
+        pages.push('...', totalPages);
+      }
+    }
+    return pages;
+  };
+
+  const handleJump = (e) => {
+    if (e.key === 'Enter') {
+      const p = parseInt(jumpPage);
+      if (!isNaN(p) && p >= 1 && p <= totalPages) {
+        onPageChange(p);
+      }
+      setJumpPage('');
+    }
+  };
+
+  if (totalPages <= 1) return null;
+
+  return (
+    <div className="pagination" style={{ gap: '6px', flexWrap: 'wrap' }}>
+      <button
+        style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '0 12px' }}
+        onClick={() => onPageChange(1)}
+        disabled={currentPage === 1}
+      >
+        <ChevronsLeft size={16} /> 第一頁
+      </button>
+      <button
+        style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '0 12px' }}
+        onClick={() => onPageChange(currentPage - 1)}
+        disabled={currentPage === 1}
+      >
+        <ChevronLeft size={16} /> 上一頁
+      </button>
+
+      {getPageNumbers().map((p, i) => (
+        <button
+          key={i}
+          className={p === currentPage ? 'active' : ''}
+          onClick={() => p !== '...' && onPageChange(p)}
+          disabled={p === '...'}
+          style={p === '...' ? { border: 'none', background: 'transparent', color: 'var(--text-secondary)' } : { padding: '0 12px' }}
+        >
+          {p}
+        </button>
+      ))}
+
+      <button
+        style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '0 12px' }}
+        onClick={() => onPageChange(currentPage + 1)}
+        disabled={currentPage === totalPages}
+      >
+        下一頁 <ChevronRight size={16} />
+      </button>
+      <button
+        style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '0 12px' }}
+        onClick={() => onPageChange(totalPages)}
+        disabled={currentPage === totalPages}
+      >
+        最尾頁 <ChevronsRight size={16} />
+      </button>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '16px', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+        跳至
+        <input
+          type="text"
+          value={jumpPage}
+          onChange={(e) => setJumpPage(e.target.value)}
+          onKeyDown={handleJump}
+          placeholder="頁碼"
+          style={{
+            width: '60px',
+            height: '36px',
+            padding: '4px 8px',
+            background: 'var(--bg-surface)',
+            border: '1px solid var(--glass-border)',
+            color: 'white',
+            borderRadius: 'var(--radius-sm)',
+            textAlign: 'center',
+            outline: 'none'
+          }}
+        />
+        頁
+      </div>
+    </div>
+  );
+}
 
 export default function Standards() {
   const queryClient = useQueryClient();
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [filterCategory, setFilterCategory] = useState('all');
+  const itemsPerPage = 50;
 
   const { data: standards = [], isLoading: loading } = useQuery({
     queryKey: ['standards'],
@@ -80,8 +192,30 @@ export default function Standards() {
     );
   }
 
-  const withUpdates = standards.filter((s) => s.has_update);
-  const noUpdates = standards.filter((s) => !s.has_update);
+  // Derive unique categories from 'notes' field
+  const categories = useMemo(() => {
+    const cats = new Set(standards.map(s => s.notes).filter(n => n && typeof n === 'string'));
+    return Array.from(cats).sort();
+  }, [standards]);
+
+  const filteredStandards = useMemo(() => {
+    if (filterCategory === 'all') return standards;
+    return standards.filter(s => s.notes === filterCategory);
+  }, [standards, filterCategory]);
+
+  // Sorting: Prioritize updates, then natural order (Windows folder style) by title
+  const sortedStandards = [...filteredStandards].sort((a, b) => {
+    if (a.has_update && !b.has_update) return -1;
+    if (!a.has_update && b.has_update) return 1;
+    return (a.title || '').localeCompare(b.title || '', undefined, { numeric: true, sensitivity: 'base' });
+  });
+
+  const totalPages = Math.ceil(sortedStandards.length / itemsPerPage) || 1;
+  // Ensure current page is valid when reducing data size (e.g. searching/deleting)
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+
+  const startIndex = (safeCurrentPage - 1) * itemsPerPage;
+  const currentData = sortedStandards.slice(startIndex, startIndex + itemsPerPage);
 
   return (
     <>
@@ -90,9 +224,25 @@ export default function Standards() {
           <h1 className="page-title">法規標準追蹤</h1>
           <p className="page-subtitle">實時監控 IEC、ISO 及各國醫療器材技術標準的修訂進度</p>
         </div>
-        <button className="btn btn-primary" onClick={openNew}>
-          <Plus size={18} /> 新增追蹤標準
-        </button>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <select
+            className="form-select"
+            value={filterCategory}
+            onChange={(e) => {
+              setFilterCategory(e.target.value);
+              setCurrentPage(1);
+            }}
+            style={{ width: '200px', cursor: 'pointer' }}
+          >
+            <option value="all">所有類別</option>
+            {categories.map(c => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <button className="btn btn-primary" onClick={openNew}>
+            <Plus size={18} /> 新增追蹤標準
+          </button>
+        </div>
       </div>
 
       {standards.length === 0 ? (
@@ -109,38 +259,92 @@ export default function Standards() {
           </div>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-          {/* With updates section */}
-          {withUpdates.length > 0 && (
-            <section>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-                <RotateCcw size={20} style={{ color: 'var(--accent-warning)' }} />
-                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--accent-warning)' }}>
-                  發現版本更新 ({withUpdates.length})
-                </h3>
-              </div>
-              <div style={{ display: 'grid', gap: '16px' }}>
-                {withUpdates.map((s) => (
-                  <StandardCard key={s.id} standard={s} onEdit={openEdit} onDelete={handleDelete} highlight />
-                ))}
-              </div>
-            </section>
-          )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
 
-          {/* No updates section */}
-          <section>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-              <CheckCircle size={20} style={{ color: 'var(--accent-success)' }} />
-              <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
-                版本已是最新 ({noUpdates.length})
-              </h3>
-            </div>
-            <div style={{ display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(auto-fill, minmax(450px, 1fr))' }}>
-              {noUpdates.map((s) => (
-                <StandardCard key={s.id} standard={s} onEdit={openEdit} onDelete={handleDelete} />
-              ))}
-            </div>
-          </section>
+          <div className="table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>法規標準名稱</th>
+                  <th style={{ width: '160px' }}>當前版本</th>
+                  <th style={{ width: '160px' }}>最新同步版本</th>
+                  <th style={{ width: '180px' }}>上次檢查時間</th>
+                  <th style={{ width: '120px', textAlign: 'right' }}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {currentData.map((s) => (
+                  <tr key={s.id} style={{
+                    background: s.has_update ? 'rgba(245, 158, 11, 0.05)' : 'transparent',
+                    borderLeft: s.has_update ? '3px solid var(--accent-warning)' : '3px solid transparent'
+                  }}>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--text-primary)' }}>
+                          {s.title}
+                        </span>
+                        {s.has_update && (
+                          <span className="tag tag-amber" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <RotateCcw size={12} /> 有新版本
+                          </span>
+                        )}
+                      </div>
+                      {s.notes && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '6px' }}>
+                          <AlertCircle size={12} /> {s.notes}
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ verticalAlign: 'middle' }}>
+                      {s.current_version ? (
+                        <span style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', fontSize: '0.9rem' }}>{s.current_version}</span>
+                      ) : (
+                        <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic', fontSize: '0.85rem' }}>未註記</span>
+                      )}
+                    </td>
+                    <td style={{ verticalAlign: 'middle' }}>
+                      <span style={{
+                        color: s.has_update ? 'var(--accent-warning)' : 'var(--text-secondary)',
+                        fontWeight: s.has_update ? 700 : 400,
+                        fontFamily: 'var(--font-mono)', fontSize: '0.9rem'
+                      }}>
+                        {s.latest_version || (s.has_update ? '檢測到更新' : (s.current_version || '同步中'))}
+                      </span>
+                    </td>
+                    <td style={{ verticalAlign: 'middle' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>
+                        <Info size={14} />
+                        {s.last_checked
+                          ? new Date(s.last_checked).toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' })
+                          : '尚未檢查'}
+                      </div>
+                    </td>
+                    <td style={{ verticalAlign: 'middle', textAlign: 'right' }}>
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '4px' }}>
+                        {s.source_url && (
+                          <a href={s.source_url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm" title="查看官方文件">
+                            <ExternalLink size={16} />
+                          </a>
+                        )}
+                        <button className="btn btn-ghost btn-sm" onClick={() => openEdit(s)} title="編輯">
+                          <Edit2 size={16} />
+                        </button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => handleDelete(s.id)} style={{ color: 'var(--accent-danger)' }} title="刪除">
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <Pagination
+            currentPage={safeCurrentPage}
+            totalPages={totalPages}
+            onPageChange={(p) => setCurrentPage(p)}
+          />
         </div>
       )}
 
@@ -202,91 +406,5 @@ export default function Standards() {
         </div>
       )}
     </>
-  );
-}
-
-function StandardCard({ standard: s, onEdit, onDelete, highlight }) {
-  return (
-    <div className="glass-card" style={{
-      display: 'flex', 
-      flexDirection: 'column',
-      padding: '20px',
-      borderLeft: highlight ? '4px solid var(--accent-warning)' : '1px solid var(--glass-border)',
-      background: highlight ? 'rgba(245, 158, 11, 0.03)' : 'var(--glass-bg)',
-      transition: 'all var(--transition-normal)'
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{
-            fontFamily: 'var(--font-mono)', fontSize: '1rem', fontWeight: 700,
-            color: 'var(--text-primary)',
-          }}>
-            {s.standard_number}
-          </span>
-          {s.has_update ? (
-            <span className="tag tag-amber" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <RotateCcw size={12} /> 有新版本
-            </span>
-          ) : (
-            <span className="tag tag-green" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <CheckCircle size={12} /> 最新
-            </span>
-          )}
-        </div>
-        <div style={{ display: 'flex', gap: '4px' }}>
-          {s.source_url && (
-            <a href={s.source_url} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm" title="查看官方文件">
-              <ExternalLink size={16} />
-            </a>
-          )}
-          <button className="btn btn-ghost btn-sm" onClick={() => onEdit(s)} title="編輯">
-            <Edit2 size={16} />
-          </button>
-          <button className="btn btn-ghost btn-sm" onClick={() => onDelete(s.id)} style={{ color: 'var(--accent-danger)' }} title="刪除">
-            <Trash2 size={16} />
-          </button>
-        </div>
-      </div>
-
-      <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '16px', fontWeight: 500 }}>
-        {s.title}
-      </div>
-
-      <div style={{ 
-        marginTop: 'auto',
-        display: 'grid', 
-        gridTemplateColumns: '1fr 1fr', 
-        gap: '12px', 
-        fontSize: '0.8rem', 
-        padding: '12px',
-        background: 'rgba(255,255,255,0.02)',
-        borderRadius: '8px',
-        border: '1px solid var(--glass-border)'
-      }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-          <span style={{ color: 'var(--text-tertiary)', fontWeight: 600 }}>當前版本</span>
-          <span style={{ color: 'var(--text-primary)' }}>{s.current_version || '未註記'}</span>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-          <span style={{ color: 'var(--text-tertiary)', fontWeight: 600 }}>最新同步版本</span>
-          <span style={{ color: s.has_update ? 'var(--accent-warning)' : 'var(--text-primary)', fontWeight: s.has_update ? 700 : 400 }}>
-            {s.latest_version || (s.has_update ? '檢測到更新' : (s.current_version || '同步中'))}
-          </span>
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <Info size={12} />
-          <span>上次檢查：{s.last_checked ? new Date(s.last_checked).toLocaleDateString('zh-TW', { year: 'numeric', month: 'long', day: 'numeric' }) : '尚未檢查'}</span>
-        </div>
-        {s.notes && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', maxWidth: '50%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            <AlertCircle size={12} />
-            <span>{s.notes}</span>
-          </div>
-        )}
-      </div>
-    </div>
   );
 }

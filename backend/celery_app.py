@@ -61,12 +61,18 @@ def run_crawler_task(crawler_name: str, historical: bool = False, product_ids: l
     from crawlers.fda_maude import FDAMaudeCrawler
     from crawlers.tfda import TFDACrawler
     from crawlers.standards import StandardsCrawler
+    from crawlers.mdcg import MdcgCrawler
+    from crawlers.fda_guidance import FdaGuidanceCrawler
+    from crawlers.tfda_regulations import TfdaRegulationsCrawler
 
     crawlers_map = {
         "fda_recall": FDARecallCrawler,
         "fda_maude": FDAMaudeCrawler,
         "tfda": TFDACrawler,
         "standards": StandardsCrawler,
+        "mdcg": MdcgCrawler,
+        "fda_guidance": FdaGuidanceCrawler,
+        "tfda_regulations": TfdaRegulationsCrawler,
     }
 
     if crawler_name not in crawlers_map:
