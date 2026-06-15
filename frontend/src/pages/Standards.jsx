@@ -22,6 +22,14 @@ import {
 
 const emptyForm = { standard_number: '', title: '', current_version: '', source_url: '', notes: '' };
 
+// 觸發掃描後，輪詢爬蟲日誌取得執行結果的設定
+const SCAN_POLL_INTERVAL_MS = 1500;
+const SCAN_POLL_TIMEOUT_MS = 60000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function Pagination({ currentPage, totalPages, onPageChange }) {
   const [jumpPage, setJumpPage] = useState('');
 
@@ -134,6 +142,7 @@ export default function Standards() {
   const [form, setForm] = useState(emptyForm);
   const [currentPage, setCurrentPage] = useState(1);
   const [filterCategory, setFilterCategory] = useState('all');
+  const [scanModal, setScanModal] = useState(null);
   const itemsPerPage = 50;
 
   const { data: standards = [], isLoading: loading } = useQuery({
@@ -197,10 +206,56 @@ export default function Standards() {
   };
 
   const handleRefresh = async (s) => {
+    const sinceTime = Date.now() - 2000; // 容許些微時間誤差
+    setScanModal({ standard: s, status: 'loading', result: null, error: null });
+
     try {
-      toast.success(`正在為 ${s.title} 啟動更新掃描...`);
       await api.triggerCrawl('standards', { standardId: s.id });
-    } catch (e) { toast.error(e.message); }
+    } catch (e) {
+      setScanModal({ standard: s, status: 'error', result: null, error: e.message });
+      return;
+    }
+
+    // 輪詢爬蟲日誌，取得這次掃描的執行結果
+    const deadline = Date.now() + SCAN_POLL_TIMEOUT_MS;
+    let finalLog = null;
+    while (Date.now() < deadline) {
+      await sleep(SCAN_POLL_INTERVAL_MS);
+      try {
+        const logs = await api.getCrawlLogs();
+        finalLog = logs.find((l) =>
+          l.crawler_name === 'standards' &&
+          l.completed_at &&
+          new Date(l.completed_at).getTime() >= sinceTime
+        ) || null;
+      } catch {
+        // 暫時忽略查詢錯誤，繼續輪詢
+      }
+      if (finalLog) break;
+    }
+
+    queryClient.invalidateQueries({ queryKey: ['standards'] });
+
+    if (!finalLog) {
+      setScanModal({ standard: s, status: 'timeout', result: null, error: null });
+      return;
+    }
+
+    // 取得掃描後的最新標準資料（含抓取到的最新版本）
+    let refreshedStandard = s;
+    try {
+      const freshStandards = await api.getStandards();
+      refreshedStandard = freshStandards.find((x) => x.id === s.id) || s;
+    } catch {
+      // 取得失敗時，沿用掃描前的資料
+    }
+
+    setScanModal({
+      standard: refreshedStandard,
+      status: finalLog.status === 'success' ? 'done' : 'failed',
+      result: finalLog,
+      error: null,
+    });
   };
 
   if (loading) {
@@ -427,6 +482,94 @@ export default function Standards() {
                   {mutation.isPending ? '提交中...' : (editing ? '儲存變更' : '加入追蹤清單')}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 單一標準掃描結果視窗 */}
+      {scanModal && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ maxWidth: '480px' }}>
+            <div className="modal-header">
+              <h2 style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <RefreshCw size={20} />
+                掃描執行結果
+              </h2>
+              {scanModal.status !== 'loading' && (
+                <button className="btn btn-ghost btn-sm" onClick={() => setScanModal(null)}>
+                  <X size={20} />
+                </button>
+              )}
+            </div>
+            <div className="modal-body">
+              <p style={{ marginBottom: '16px', color: 'var(--text-secondary)' }}>
+                法規名稱：<strong style={{ color: 'var(--text-primary)' }}>
+                  {scanModal.standard.title}
+                </strong>
+              </p>
+
+              {scanModal.status === 'loading' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 0' }}>
+                  <div className="spinner"></div>
+                  <span>正在執行掃描，請稍候...</span>
+                </div>
+              )}
+
+              {scanModal.status === 'error' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-danger)' }}>
+                  <AlertCircle size={18} />
+                  <span>啟動掃描失敗：{scanModal.error}</span>
+                </div>
+              )}
+
+              {scanModal.status === 'timeout' && (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', color: 'var(--accent-warning)' }}>
+                  <AlertCircle size={18} style={{ marginTop: '2px', flexShrink: 0 }} />
+                  <span>掃描已在背景送出，但尚未在預期時間內完成，可能仍在執行中。請稍後重新整理頁面，查看「上次檢查時間」是否已更新。</span>
+                </div>
+              )}
+
+              {(scanModal.status === 'done' || scanModal.status === 'failed') && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: '8px',
+                    color: scanModal.status === 'done' ? 'var(--accent-success)' : 'var(--accent-danger)'
+                  }}>
+                    {scanModal.status === 'done' ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
+                    <strong>{scanModal.status === 'done' ? '掃描完成' : '掃描執行失敗'}</strong>
+                  </div>
+
+                  <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <span>目前使用版本：{scanModal.standard.current_version || '未註記'}</span>
+                    <span>抓取最新版本：{scanModal.standard.latest_version || '未取得'}</span>
+                    {scanModal.result?.completed_at && (
+                      <span>完成時間：{new Date(scanModal.result.completed_at).toLocaleString('zh-TW')}</span>
+                    )}
+                  </div>
+
+                  {scanModal.result?.error_message && (
+                    <div style={{ fontSize: '0.9rem', color: 'var(--accent-danger)' }}>
+                      錯誤訊息：{scanModal.result.error_message}
+                    </div>
+                  )}
+
+                  {scanModal.status === 'done' && scanModal.standard.has_update > 0 && (
+                    <div style={{ fontSize: '0.9rem', color: 'var(--accent-warning)' }}>
+                      ⚠️ 偵測到新版本，請查看清單中的「最新同步版本」欄位。
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                className="btn btn-primary"
+                onClick={() => setScanModal(null)}
+                disabled={scanModal.status === 'loading'}
+              >
+                確認
+              </button>
             </div>
           </div>
         </div>

@@ -1,5 +1,6 @@
 """SQLite / PostgreSQL 相容資料庫模型定義與初始化（v2: 含 Audit Trail 支援）"""
 import os
+import re
 import sqlite3
 from pathlib import Path
 from env_loader import load_environment
@@ -396,9 +397,118 @@ def migrate_db():
     except Exception:
         pass
 
+    # ---- 標準「法規名稱」格式正規化 ----
+    # ISO/IEC 標準的「法規名稱」應只包含編號（例如「ISO 10993-4」），版本資訊
+    # （年份）應存於「目前使用版本」(current_version)。過去資料常將兩者
+    # 合併存放於「法規名稱」(例如「ISO 10993-4:2017」或「ISO10993-1:2018」)，
+    # 此處一次性將這類記錄拆解：法規名稱正規化為僅含編號，若「目前使用版本」
+    # 原本為空白則補上拆解出的版本（已有值則保留不變）。
+    standards_normalized = 0
+    try:
+        title_version_pattern = re.compile(
+            r"^\s*((?:ISO|IEC)(?:/(?:IEC|TR|TS))?\s*\d+(?:[-/]\d+)*)\s*[:：]\s*(\d{4}.*)$",
+            re.IGNORECASE,
+        )
+        rows = cursor.execute("SELECT id, title, current_version FROM standards").fetchall()
+        for row in rows:
+            title = (row["title"] or "").strip()
+            match = title_version_pattern.match(title)
+            if not match:
+                continue
+
+            base = re.sub(r"\s+", " ", match.group(1).strip())
+            base = re.sub(r"^(ISO|IEC)(?=\d)", r"\1 ", base, flags=re.IGNORECASE)
+            version = match.group(2).strip()
+
+            current_version = (row["current_version"] or "").strip()
+            new_current_version = current_version or version
+
+            if base != title or new_current_version != current_version:
+                cursor.execute(
+                    "UPDATE standards SET title = ?, current_version = ? WHERE id = ?",
+                    (base, new_current_version, row["id"]),
+                )
+                standards_normalized += 1
+        conn.commit()
+    except Exception:
+        if DATABASE_URL:
+            conn.rollback()
+
+    # ---- 依「參考資料/外來文件清單.xlsx」ISO 類別法規清單，精確覆寫法規名稱與目前使用版本 ----
+    # 對應表以「公司文件編號」(standard_number) 為鍵，直接覆寫 title / current_version。
+    iso_standard_mapping = {
+        "R101-0001-01": ("ISO 13485", "2016"),
+        "R101-0002-01": ("ISO 14971", "2019"),
+        "R101-0003-01": ("ISO 2859-1", "1999"),
+        "R101-0004-01": ("ISO 10993-1", "2018"),
+        "R101-0005-02": ("ISO 10993-7", "2026"),
+        "R101-0006-01": ("ISO 10993-10", "2021"),
+        "R101-0007-01": ("ISO 10993-17", "2023"),
+        "R101-0008-01": ("ISO 11607-1", "2019+Amd 1:2023"),
+        "R101-0009-01": ("ISO 15223-1", "2021"),
+        "R101-0009-02": ("ISO 15223-1", "2021+Amd 1:2025"),
+        "R101-0010-01": ("ISO 9227", "2017"),
+        "R101-0011-01": ("ISO 11737-2", "2019"),
+        "R101-0012-01": ("ISO 11135", "2014+Amd 1:2018"),
+        "R101-0013-01": ("ISO 3601-3", "2005"),
+        "R101-0014-01": ("ISO 11737-1", "2018+Amd 1:2021"),
+        "R101-0015-01": ("ISO 14155", "2020"),
+        "R101-0016-01": ("ISO 10993-9", "2009"),
+        "R101-0017-01": ("ISO 10993-13", "2010"),
+        "R101-0018-01": ("ISO 10993-14", "2001"),
+        "R101-0019-01": ("ISO 10993-15", "2019"),
+        "R101-0020-01": ("ISO 10993-5", "2009"),
+        "R101-0021-01": ("ISO/TR 24971", "2020"),
+        "R101-0022-01": ("ISO 14644-1", "2015"),
+        "R101-0023-01": ("ISO 10993-4", "2017"),
+        "R101-0024-01": ("ISO 10993-11", "2017"),
+        "R101-0025-01": ("ISO 10993-18", "2020"),
+        "R101-0026-01": ("ISO/TS 10993-19", "2020"),
+        "R101-0027-01": ("ISO/TR 80002-2", "2017"),
+        "R101-0028-01": ("ISO 17665", "2024"),
+        "R101-0029-01": ("ISO 11607-2", "2019+Amd 1:2023"),
+        "R101-0030-01": ("ISO 20417", "2021"),
+        "R101-0031-01": ("ISO 10993-12", "2021"),
+        "R101-0032-01": ("ISO 10993-23", "2021"),
+        "R101-0033-01": ("ISO 17664-1", "2021"),
+        "R101-0034-01": ("ISO 11138-2", "2017"),
+        "R101-0035-01": ("ISO 19011", "2018"),
+        "R101-0036-01": ("ISO 14698-1", "2003"),
+        "R101-0037-01": ("ISO 14698-2", "2003"),
+        "R101-0038-01": ("ISO 14644-2", "2015"),
+        "R101-0039-01": ("ISO 14644-3", "2019"),
+        "R101-0040-01": ("ISO/TR 20416", "2020"),
+        "R101-0041-01": ("ISO 3166-1", "2020"),
+        "R101-0042-01": ("ISO 8601-1", "2019+Amd 1:2022"),
+        "R101-0043-01": ("ISO 15225", "2016"),
+        "R101-0044-01": ("ISO 11737-3", "2023"),
+        "R101-0045-01": ("ISO 17664-2", "2021"),
+    }
+    iso_mapping_applied = 0
+    try:
+        for standard_number, (title_val, version_val) in iso_standard_mapping.items():
+            row = cursor.execute(
+                "SELECT id, title, current_version FROM standards WHERE standard_number = ?",
+                (standard_number,),
+            ).fetchone()
+            if not row:
+                continue
+            if row["title"] != title_val or (row["current_version"] or "") != version_val:
+                cursor.execute(
+                    "UPDATE standards SET title = ?, current_version = ? WHERE id = ?",
+                    (title_val, version_val, row["id"]),
+                )
+                iso_mapping_applied += 1
+        conn.commit()
+    except Exception:
+        if DATABASE_URL:
+            conn.rollback()
+
     conn.commit()
     conn.close()
-    print(f"Database migration completed, applied {migrated} column updates")
+    print(f"Database migration completed, applied {migrated} column updates, "
+          f"normalized {standards_normalized} standards titles, "
+          f"applied {iso_mapping_applied} ISO standard mapping updates")
 
 
 def write_audit_log(conn, operator: str, action: str, target_table: str,

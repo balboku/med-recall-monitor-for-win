@@ -12,6 +12,7 @@ import {
   Download,
   Globe,
   History,
+  Key,
   Megaphone,
   Play,
   RotateCw,
@@ -71,6 +72,11 @@ export default function Settings() {
   const [announcementText, setAnnouncementText] = useState('');
   const [savingAnnouncement, setSavingAnnouncement] = useState(false);
   const [logPage, setLogPage] = useState(1);
+  const [geminiApiKeyInput, setGeminiApiKeyInput] = useState('');
+  const [savingGeminiKey, setSavingGeminiKey] = useState(false);
+  const [googleSearchApiKeyInput, setGoogleSearchApiKeyInput] = useState('');
+  const [googleSearchCxInput, setGoogleSearchCxInput] = useState('');
+  const [savingGoogleSearchConfig, setSavingGoogleSearchConfig] = useState(false);
 
   const { data: products = [] } = useQuery({
     queryKey: ['products'],
@@ -105,6 +111,16 @@ export default function Settings() {
     queryKey: ['announcement'],
     queryFn: api.getAnnouncement,
     onSuccess: (data) => setAnnouncementText(data?.content ?? ''),
+  });
+
+  const { data: geminiKeyData } = useQuery({
+    queryKey: ['geminiApiKey'],
+    queryFn: api.getGeminiApiKey,
+  });
+
+  const { data: googleSearchConfigData } = useQuery({
+    queryKey: ['googleSearchConfig'],
+    queryFn: api.getGoogleSearchConfig,
   });
 
 
@@ -150,6 +166,43 @@ export default function Settings() {
       toast.error(`儲存失敗: ${e.message}`);
     } finally {
       setSavingAnnouncement(false);
+    }
+  };
+
+  const handleSaveGeminiApiKey = async () => {
+    if (!geminiApiKeyInput.trim()) {
+      toast.error('請輸入 API Key');
+      return;
+    }
+    setSavingGeminiKey(true);
+    try {
+      await api.saveGeminiApiKey(geminiApiKeyInput.trim());
+      toast.success('Gemini API Key 已儲存！');
+      setGeminiApiKeyInput('');
+      queryClient.invalidateQueries({ queryKey: ['geminiApiKey'] });
+    } catch (e) {
+      toast.error(`儲存失敗: ${e.message}`);
+    } finally {
+      setSavingGeminiKey(false);
+    }
+  };
+
+  const handleSaveGoogleSearchConfig = async () => {
+    if (!googleSearchApiKeyInput.trim() && !googleSearchCxInput.trim()) {
+      toast.error('請至少輸入 API Key 或搜尋引擎 ID 其中一項');
+      return;
+    }
+    setSavingGoogleSearchConfig(true);
+    try {
+      await api.saveGoogleSearchConfig(googleSearchApiKeyInput.trim(), googleSearchCxInput.trim());
+      toast.success('Google Custom Search 設定已儲存！');
+      setGoogleSearchApiKeyInput('');
+      setGoogleSearchCxInput('');
+      queryClient.invalidateQueries({ queryKey: ['googleSearchConfig'] });
+    } catch (e) {
+      toast.error(`儲存失敗: ${e.message}`);
+    } finally {
+      setSavingGoogleSearchConfig(false);
     }
   };
 
@@ -277,6 +330,111 @@ export default function Settings() {
             {crawling.all ? <RotateCw size={18} className="spinner" /> : <Play size={18} />}
             全部立即執行
           </button>
+        </div>
+
+        {/* Gemini API Key 設定 */}
+        <div className="glass-card" style={{ padding: '24px', marginBottom: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+            <Key size={22} className="text-accent-blue" />
+            <div>
+              <h2 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)' }}>Gemini API Key</h2>
+              <p style={{ fontSize: '0.83rem', color: 'var(--text-tertiary)', marginTop: '2px' }}>
+                供「ISO 標準官方網址年度查找」腳本使用（Google AI Studio 取得，Search Grounding）。
+                {geminiKeyData?.has_key ? `目前已設定，金鑰末四碼：${geminiKeyData.masked}` : '目前尚未設定。'}
+              </p>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            <input
+              type="password"
+              value={geminiApiKeyInput}
+              onChange={(e) => setGeminiApiKeyInput(e.target.value)}
+              placeholder={geminiKeyData?.has_key ? '輸入新的 API Key 以覆蓋目前設定' : '輸入 Gemini API Key'}
+              style={{
+                flex: '1 1 280px',
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--glass-border)',
+                borderRadius: '8px',
+                padding: '10px 14px',
+                color: 'var(--text-primary)',
+                fontSize: '0.9rem',
+                outline: 'none',
+              }}
+              onFocus={(e) => e.target.style.borderColor = 'var(--accent-blue)'}
+              onBlur={(e) => e.target.style.borderColor = 'var(--glass-border)'}
+            />
+            <button
+              className="btn btn-primary"
+              onClick={handleSaveGeminiApiKey}
+              disabled={savingGeminiKey}
+              style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+            >
+              {savingGeminiKey ? <RotateCw size={16} className="spinner" /> : <Save size={16} />}
+              {savingGeminiKey ? '儲存中...' : '儲存'}
+            </button>
+          </div>
+        </div>
+
+        {/* Google Custom Search API 設定 */}
+        <div className="glass-card" style={{ padding: '24px', marginBottom: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+            <Key size={22} className="text-accent-blue" />
+            <div>
+              <h2 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)' }}>Google Custom Search API</h2>
+              <p style={{ fontSize: '0.83rem', color: 'var(--text-tertiary)', marginTop: '2px' }}>
+                供「ISO 標準官方網址年度查找」腳本使用（需於 Google Cloud Console 啟用 Custom Search API 並建立搜尋引擎 ID）。
+                {googleSearchConfigData?.has_key ? `API Key 已設定，末四碼：${googleSearchConfigData.masked}` : ' API Key 尚未設定。'}
+                {googleSearchConfigData?.cx ? `　搜尋引擎 ID：${googleSearchConfigData.cx}` : '　搜尋引擎 ID 尚未設定。'}
+              </p>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            <input
+              type="password"
+              value={googleSearchApiKeyInput}
+              onChange={(e) => setGoogleSearchApiKeyInput(e.target.value)}
+              placeholder={googleSearchConfigData?.has_key ? '輸入新的 API Key 以覆蓋目前設定' : '輸入 Custom Search API Key'}
+              style={{
+                flex: '1 1 280px',
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--glass-border)',
+                borderRadius: '8px',
+                padding: '10px 14px',
+                color: 'var(--text-primary)',
+                fontSize: '0.9rem',
+                outline: 'none',
+              }}
+              onFocus={(e) => e.target.style.borderColor = 'var(--accent-blue)'}
+              onBlur={(e) => e.target.style.borderColor = 'var(--glass-border)'}
+            />
+            <input
+              type="text"
+              value={googleSearchCxInput}
+              onChange={(e) => setGoogleSearchCxInput(e.target.value)}
+              placeholder={googleSearchConfigData?.cx ? '輸入新的搜尋引擎 ID 以覆蓋目前設定' : '輸入搜尋引擎 ID (cx)'}
+              style={{
+                flex: '1 1 280px',
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--glass-border)',
+                borderRadius: '8px',
+                padding: '10px 14px',
+                color: 'var(--text-primary)',
+                fontSize: '0.9rem',
+                outline: 'none',
+              }}
+              onFocus={(e) => e.target.style.borderColor = 'var(--accent-blue)'}
+              onBlur={(e) => e.target.style.borderColor = 'var(--glass-border)'}
+            />
+            <button
+              className="btn btn-primary"
+              onClick={handleSaveGoogleSearchConfig}
+              disabled={savingGoogleSearchConfig}
+              style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+            >
+              {savingGoogleSearchConfig ? <RotateCw size={16} className="spinner" /> : <Save size={16} />}
+              {savingGoogleSearchConfig ? '儲存中...' : '儲存'}
+            </button>
+          </div>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>

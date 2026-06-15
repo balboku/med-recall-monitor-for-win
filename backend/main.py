@@ -315,3 +315,96 @@ def save_announcement(payload: AnnouncementRequest):
         return {"ok": True}
     finally:
         conn.close()
+
+
+@app.get("/api/settings/gemini-api-key")
+def get_gemini_api_key():
+    from database import get_db
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT value FROM system_settings WHERE key = 'gemini_api_key'"
+        ).fetchone()
+        value = row["value"] if row else ""
+        masked = ""
+        if value:
+            masked = ("*" * max(len(value) - 4, 0)) + value[-4:]
+        return {"has_key": bool(value), "masked": masked}
+    finally:
+        conn.close()
+
+
+class GeminiApiKeyRequest(BaseModel):
+    api_key: str
+
+@app.put("/api/settings/gemini-api-key")
+def save_gemini_api_key(payload: GeminiApiKeyRequest):
+    from database import get_db
+    conn = get_db()
+    try:
+        conn.execute(
+            """
+            INSERT INTO system_settings (key, value, updated_at)
+            VALUES ('gemini_api_key', ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (payload.api_key.strip(),)
+        )
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.get("/api/settings/google-search-config")
+def get_google_search_config():
+    from database import get_db
+    conn = get_db()
+    try:
+        api_key_row = conn.execute(
+            "SELECT value FROM system_settings WHERE key = 'google_search_api_key'"
+        ).fetchone()
+        cx_row = conn.execute(
+            "SELECT value FROM system_settings WHERE key = 'google_search_cx'"
+        ).fetchone()
+        api_key = api_key_row["value"] if api_key_row else ""
+        cx = cx_row["value"] if cx_row else ""
+        masked = ""
+        if api_key:
+            masked = ("*" * max(len(api_key) - 4, 0)) + api_key[-4:]
+        return {"has_key": bool(api_key), "masked": masked, "cx": cx}
+    finally:
+        conn.close()
+
+
+class GoogleSearchConfigRequest(BaseModel):
+    api_key: Optional[str] = None
+    cx: Optional[str] = None
+
+@app.put("/api/settings/google-search-config")
+def save_google_search_config(payload: GoogleSearchConfigRequest):
+    from database import get_db
+    conn = get_db()
+    try:
+        if payload.api_key is not None and payload.api_key.strip():
+            conn.execute(
+                """
+                INSERT INTO system_settings (key, value, updated_at)
+                VALUES ('google_search_api_key', ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                """,
+                (payload.api_key.strip(),)
+            )
+        if payload.cx is not None and payload.cx.strip():
+            conn.execute(
+                """
+                INSERT INTO system_settings (key, value, updated_at)
+                VALUES ('google_search_cx', ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                """,
+                (payload.cx.strip(),)
+            )
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()

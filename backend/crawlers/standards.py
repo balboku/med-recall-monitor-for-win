@@ -143,22 +143,39 @@ class StandardsCrawler(BaseCrawler):
             if badge_el:
                 info["status"] = badge_el.strip()
 
-        # 找「New version available」/「Revised by」區塊，偵測標準是否已有新版本取代
-        # 例如 Withdrawn 的 ISO 2859-1:1999 頁面會顯示
-        # "New version available: ISO 2859-1:2026"，連結指向新版頁面
-        new_ver_node = soup.find(string=re.compile(r"(New version available|Revised by)", re.IGNORECASE))
-        if new_ver_node:
-            container = new_ver_node.parent
-            link = container.find("a") if container else None
-            if not link and container and container.parent:
-                link = container.parent.find("a")
-            if link and link.get("href"):
-                new_title = link.get_text(strip=True)
-                year_match = re.search(r":(\d{4})", new_title)
-                if year_match:
-                    info["new_edition_title"] = new_title
-                    info["new_edition_url"] = link.get("href", "")
-                    info["new_edition_year"] = year_match.group(1)
+        # 找「New version available」/「Revised by」資訊，偵測標準是否已有新版本取代
+        # 例如 Withdrawn 的 ISO 10993-1:2018 頁面會顯示
+        # "New version available: ISO 10993-1:2025"，
+        # 或在 Life cycle 區塊顯示「Revised by」+「Published」+「ISO 10993-1:2025」。
+        # ISO/IEC 網站不同頁面的 DOM 巢狀結構不一致，往上層找最近的 <a> 標籤
+        # 容易找不到連結，因此改以「整頁文字」比對找出新版編號/年份，
+        # 再到整個頁面搜尋文字相符的連結（找不到連結仍可標記新版年份）。
+        page_text = soup.get_text(separator=" ")
+        new_ed_match = re.search(
+            r"(?:New version available|Revised by)\s*:?\s*(?:Published\s*)?"
+            r"((?:ISO|IEC)(?:/(?:IEC|TR|TS))?[\w/\-\s]*?:\s*(\d{4}))",
+            page_text,
+            re.IGNORECASE,
+        )
+        if new_ed_match:
+            new_title = re.sub(r"\s+", " ", new_ed_match.group(1).strip())
+            new_year = new_ed_match.group(2)
+            info["new_edition_title"] = new_title
+            info["new_edition_year"] = new_year
+
+            new_title_base = self._normalize_base_number(self._extract_base_number(new_title))
+            for a in soup.find_all("a"):
+                href = a.get("href", "")
+                if not href:
+                    continue
+                a_text = re.sub(r"\s+", " ", a.get_text(strip=True))
+                if a_text == new_title or (
+                    new_year in a_text
+                    and new_title_base
+                    and self._normalize_base_number(self._extract_base_number(a_text)) == new_title_base
+                ):
+                    info["new_edition_url"] = href
+                    break
 
         return info
 
@@ -167,13 +184,17 @@ class StandardsCrawler(BaseCrawler):
         'ISO 2859-1:1999' -> 'ISO 2859-1'
         'ISO 15223-1 2021 Amd 1 2025' -> 'ISO 15223-1'
         'IEC/TR 80002-1:2009' -> 'IEC/TR 80002-1'
+
+        若文字中找不到 ISO/IEC 編號格式，回傳空字串（而非整段文字），
+        避免將內部文件編號或純文字法規名稱誤判為「基本編號」進而與
+        實際網頁標題比對失敗。
         """
         if not title:
             return ""
-        match = re.match(r"\s*((?:ISO|IEC)(?:/TR|/TS)?\s*[\d]+(?:[-/]\d+)*)", title, re.IGNORECASE)
+        match = re.search(r"((?:ISO|IEC)(?:/TR|/TS)?\s*[\d]+(?:[-/]\d+)*)", title, re.IGNORECASE)
         if match:
             return re.sub(r"\s+", " ", match.group(1).strip())
-        return title.split(':')[0].strip()
+        return ""
 
     async def _check_standard(self, standard_number: str, source_url: str, expected_title: str = "") -> dict:
         """檢查單一標準的最新版本"""
@@ -190,6 +211,11 @@ class StandardsCrawler(BaseCrawler):
 
             # 驗證抓回的標準編號是否與預期一致，避免 source_url 指向錯誤文件
             # (例如資料庫記錄為 ISO 2859-1，但 source_url 卻指向 ISO 11661 的頁面)
+            # 注意：「公司文件編號」(standard_number) 為公司內部自訂編號，與 ISO/IEC
+            # 官方編號無關，不可用於此比對，否則永遠找不到對應結果。
+            # expected_base 僅從「法規名稱」(expected_title) 擷取；若其中找不到
+            # ISO/IEC 編號格式，視為無法比對，不進行查核（避免誤判為網址錯誤
+            # 而封鎖版本更新偵測）。
             expected_base = self._extract_base_number(expected_title)
             found_base = self._extract_base_number(info.get("full_title", ""))
             if (
@@ -243,6 +269,38 @@ class StandardsCrawler(BaseCrawler):
             return False
         return any(kw in status_str.lower() for kw in ["under revision", "revision", "preliminary", "draft"])
 
+    def _split_title_version(self, title: str):
+        """將「法規名稱:版本」格式的字串拆解為 (法規名稱, 版本)。
+
+        ISO/IEC 標準的正式命名方式為「編號:年份」，例如 'ISO10993-1:2018'，
+        其中「ISO10993-1」是法規名稱（編號），「2018」是版本。
+        過去資料常將整串（含版本）存入「法規名稱」欄位，導致「目前使用版本」
+        (current_version) 欄位空白，使新版本比對失效。
+
+        例如：
+          'ISO10993-1:2018' -> ('ISO 10993-1', '2018')
+          'IEC 60601-1:2020' -> ('IEC 60601-1', '2020')
+
+        若無法解析出「編號:年份」格式，回傳 (title 去除前後空白, '')。
+
+        注意：「公司文件編號」(standard_number，例如 'R101-0004-01') 不適用此格式，
+        不會被誤判（regex 要求以 ISO/IEC 開頭）。
+        """
+        if not title:
+            return title, ""
+        match = re.match(
+            r"^\s*((?:ISO|IEC)(?:/(?:IEC|TR|TS))?\s*[\d]+(?:[-/]\d+)*)\s*[:：]\s*(\d{4}.*)$",
+            title.strip(),
+            re.IGNORECASE,
+        )
+        if match:
+            base = re.sub(r"\s+", " ", match.group(1).strip())
+            # 將「ISO10993-1」正規化為「ISO 10993-1」(編號前加空格)
+            base = re.sub(r"^(ISO|IEC)(?=\d)", r"\1 ", base, flags=re.IGNORECASE)
+            version = match.group(2).strip()
+            return base, version
+        return title.strip(), ""
+
     def _update_standard(self, standard_id: int, latest_info: dict) -> bool:
         """P2-4: 更新標準版本資訊，回傳是否有更新（強化副版本比對）"""
         conn = get_db()
@@ -290,7 +348,22 @@ class StandardsCrawler(BaseCrawler):
                 )
                 return False
 
-            current_version = self._normalize_version(row["latest_version"] or row["current_version"] or "")
+            # 修正「法規名稱」與「目前使用版本」欄位混用的舊資料：
+            # ISO/IEC 標準的「法規名稱」應只包含編號（例如「ISO 10993-4」），
+            # 「目前使用版本」則為年份（例如「2017」）。
+            # 若「法規名稱」(title) 仍是「ISO10993-4:2017」這類「編號:版本」
+            # 格式，一律拆解並將法規名稱正規化為僅含編號；若「目前使用版本」
+            # (current_version) 原本為空白，則同時補上拆解出的版本，
+            # 避免版本比對因 current_version 空白而失效。
+            title_for_db = row["title"] or ""
+            current_version_for_db = row["current_version"] or ""
+            split_title, split_version = self._split_title_version(title_for_db)
+            if split_version:
+                title_for_db = split_title
+                if not current_version_for_db.strip():
+                    current_version_for_db = split_version
+
+            current_version = self._normalize_version(row["latest_version"] or current_version_for_db or "")
             new_version = self._normalize_version(latest_info.get("version", ""))
             status_str = latest_info.get("status", "")
 
@@ -308,15 +381,19 @@ class StandardsCrawler(BaseCrawler):
             has_update = 0
             if self._is_under_revision(status_str):
                 has_update = 2  # 標準進入修訂中，預告即將更版，需提前關注
+            elif is_new_edition:
+                has_update = 1  # 已公告新版本（即使 current_version 尚為空白也視為有更新）
             elif new_version and current_version and new_version != current_version:
                 has_update = 1  # 版本號有實質變化（含已發布新版本的情況）
 
-            latest_version_value = latest_info.get("version") or row["latest_version"] or row["current_version"]
+            latest_version_value = latest_info.get("version") or row["latest_version"] or current_version_for_db
             if is_new_edition:
                 latest_version_value = new_edition_year
 
             conn.execute("""
                 UPDATE standards SET
+                    title = ?,
+                    current_version = ?,
                     latest_version = ?,
                     status = COALESCE(?, status),
                     has_update = ?,
@@ -324,6 +401,8 @@ class StandardsCrawler(BaseCrawler):
                     updated_at = ?
                 WHERE id = ?
             """, (
+                title_for_db,
+                current_version_for_db,
                 latest_version_value,
                 status_str or None,
                 has_update,

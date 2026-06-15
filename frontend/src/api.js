@@ -74,4 +74,12 @@ export const api = {
   // Announcement
   getAnnouncement: () => request('/announcement'),
   saveAnnouncement: (content) => request('/announcement', { method: 'PUT', body: JSON.stringify({ content }) }),
+
+  // Gemini API Key（ISO官方網址年度查找用）
+  getGeminiApiKey: () => request('/settings/gemini-api-key'),
+  saveGeminiApiKey: (apiKey) => request('/settings/gemini-api-key', { method: 'PUT', body: JSON.stringify({ api_key: apiKey }) }),
+
+  // Google Custom Search API（ISO官方網址年度查找用）
+  getGoogleSearchConfig: () => request('/settings/google-search-config'),
+  saveGoogleSearchConfig: (apiKey, cx) => request('/settings/google-search-config', { method: 'PUT', body: JSON.stringify({ api_key: apiKey, cx }) }),
 };
