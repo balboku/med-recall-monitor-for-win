@@ -62,7 +62,7 @@ export const api = {
   getAuditLog: (params) => request(`/analytics/audit-log?${new URLSearchParams(params)}`),
 
   // Crawl
-  triggerCrawl: (name, options = {}) => request(`/crawl/${name}`, { method: 'POST', body: JSON.stringify({ historical: options.historical || false, product_ids: options.productIds || null }) }),
+  triggerCrawl: (name, options = {}) => request(`/crawl/${name}`, { method: 'POST', body: JSON.stringify({ historical: options.historical || false, product_ids: options.productIds || null, standard_id: options.standardId || null }) }),
   getCrawlLogs: () => request('/crawl/logs'),
 
   // Tools

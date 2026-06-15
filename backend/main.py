@@ -203,11 +203,13 @@ def get_system_info():
 class CrawlRequest(BaseModel):
     historical: bool = False
     product_ids: Optional[List[int]] = None
+    standard_id: Optional[int] = None
 
 @app.post("/api/crawl/{crawler_name}")
 async def trigger_crawl(crawler_name: str, payload: Optional[CrawlRequest] = None):
     historical = payload.historical if payload else False
     product_ids = payload.product_ids if payload else None
+    standard_id = payload.standard_id if payload else None
 
     valid_crawlers = ["fda_recall", "fda_maude", "tfda", "standards", "all"]
     if crawler_name not in valid_crawlers:
@@ -216,12 +218,13 @@ async def trigger_crawl(crawler_name: str, payload: Optional[CrawlRequest] = Non
     if crawler_name == "all":
         mode = None
         for name in ["fda_recall", "fda_maude", "tfda", "standards"]:
-            mode = enqueue_crawler(name, historical, product_ids)
+            mode = enqueue_crawler(name, historical, product_ids, standard_id)
             logger.info(
-                "Triggered crawler=%s historical=%s product_ids=%s via %s",
+                "Triggered crawler=%s historical=%s product_ids=%s standard_id=%s via %s",
                 name,
                 historical,
                 product_ids,
+                standard_id,
                 mode,
             )
         return {
@@ -231,12 +234,13 @@ async def trigger_crawl(crawler_name: str, payload: Optional[CrawlRequest] = Non
             "dispatch_mode": mode,
         }
 
-    mode = enqueue_crawler(crawler_name, historical, product_ids)
+    mode = enqueue_crawler(crawler_name, historical, product_ids, standard_id)
     logger.info(
-        "Triggered crawler=%s historical=%s product_ids=%s via %s",
+        "Triggered crawler=%s historical=%s product_ids=%s standard_id=%s via %s",
         crawler_name,
         historical,
         product_ids,
+        standard_id,
         mode,
     )
     return {

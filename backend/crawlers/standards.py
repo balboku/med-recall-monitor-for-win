@@ -373,7 +373,7 @@ class StandardsCrawler(BaseCrawler):
         finally:
             conn.close()
 
-    async def run(self, historical: bool = False, product_ids: list = None, **kwargs):
+    async def run(self, historical: bool = False, product_ids: list = None, standard_id: int = None, **kwargs):
         """執行標準版本檢查"""
         started_at = datetime.now().isoformat()
         log_id = self.start_crawl_log(started_at)
@@ -382,7 +382,10 @@ class StandardsCrawler(BaseCrawler):
 
         conn = get_db()
         try:
-            standards = conn.execute("SELECT * FROM standards").fetchall()
+            if standard_id:
+                standards = conn.execute("SELECT * FROM standards WHERE id = ?", (standard_id,)).fetchall()
+            else:
+                standards = conn.execute("SELECT * FROM standards").fetchall()
             standards = [dict(row) for row in standards]
         finally:
             conn.close()

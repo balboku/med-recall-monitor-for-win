@@ -56,7 +56,7 @@ def _create_failure_alert(crawler_name: str, error: str):
 
 
 @celery_app.task
-def run_crawler_task(crawler_name: str, historical: bool = False, product_ids: list = None):
+def run_crawler_task(crawler_name: str, historical: bool = False, product_ids: list = None, standard_id: int = None):
     from crawlers.fda_recall import FDARecallCrawler
     from crawlers.fda_maude import FDAMaudeCrawler
     from crawlers.tfda import TFDACrawler
@@ -82,9 +82,12 @@ def run_crawler_task(crawler_name: str, historical: bool = False, product_ids: l
 
     async def _run():
         try:
-            logger.info(f"開始執行 Celery 爬蟲任務: {crawler_name} (historical={historical}, product_ids={product_ids})")
+            logger.info(f"開始執行 Celery 爬蟲任務: {crawler_name} (historical={historical}, product_ids={product_ids}, standard_id={standard_id})")
             crawler = cls()
-            await crawler.run(historical=historical, product_ids=product_ids)
+            if crawler_name == "standards" and standard_id is not None:
+                await crawler.run(standard_id=standard_id)
+            else:
+                await crawler.run(historical=historical, product_ids=product_ids)
             await crawler.close()
             logger.info(f"Celery 爬蟲任務完成: {crawler_name}")
         except Exception as e:

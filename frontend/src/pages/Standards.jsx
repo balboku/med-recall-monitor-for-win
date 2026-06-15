@@ -9,6 +9,7 @@ import {
   Globe,
   CheckCircle,
   RotateCcw,
+  RefreshCw,
   X,
   Info,
   AlertCircle,
@@ -191,6 +192,14 @@ export default function Standards() {
     if (!confirm('確定要移除此標準？')) return;
     try {
       await mutation.mutateAsync({ action: 'delete', id });
+      setShowModal(false);
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const handleRefresh = async (s) => {
+    try {
+      toast.success(`正在為 ${s.title} 啟動更新掃描...`);
+      await api.triggerCrawl('standards', { standardId: s.id });
     } catch (e) { toast.error(e.message); }
   };
 
@@ -333,11 +342,11 @@ export default function Standards() {
                             <ExternalLink size={16} />
                           </a>
                         )}
+                        <button className="btn btn-ghost btn-sm" onClick={() => handleRefresh(s)} title="執行更新掃描" style={{ color: 'var(--accent-info)' }}>
+                          <RefreshCw size={16} />
+                        </button>
                         <button className="btn btn-ghost btn-sm" onClick={() => openEdit(s)} title="編輯">
                           <Edit2 size={16} />
-                        </button>
-                        <button className="btn btn-ghost btn-sm" onClick={() => handleDelete(s.id)} style={{ color: 'var(--accent-danger)' }} title="刪除">
-                          <Trash2 size={16} />
                         </button>
                       </div>
                     </td>
@@ -402,12 +411,22 @@ export default function Standards() {
                   placeholder="紀錄此標準與產品開發的關聯性..." style={{ minHeight: '100px' }} />
               </div>
             </div>
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => setShowModal(false)}>取消</button>
-              <button className="btn btn-primary" onClick={handleSave}
-                disabled={!form.standard_number.trim() || !form.title.trim() || mutation.isPending}>
-                {mutation.isPending ? '提交中...' : (editing ? '儲存變更' : '加入追蹤清單')}
-              </button>
+            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                {editing && (
+                  <button className="btn btn-ghost" onClick={() => handleDelete(editing.id)} style={{ color: 'var(--accent-danger)' }} title="刪除">
+                    <Trash2 size={18} style={{ marginRight: '6px' }} />
+                    刪除標準
+                  </button>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button className="btn btn-secondary" onClick={() => setShowModal(false)}>取消</button>
+                <button className="btn btn-primary" onClick={handleSave}
+                  disabled={!form.standard_number.trim() || !form.title.trim() || mutation.isPending}>
+                  {mutation.isPending ? '提交中...' : (editing ? '儲存變更' : '加入追蹤清單')}
+                </button>
+              </div>
             </div>
           </div>
         </div>
