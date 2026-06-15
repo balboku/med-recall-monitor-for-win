@@ -1,0 +1,21 @@
+ISO 11137-1	https://www.iso.org/standard/56137.html	ISO 11135:2014 - Sterilization of health-care products — Ethylene oxide — Requirements for the development, validation and routine control of a sterilization process for medical devices
+ISO 11737-1	https://www.iso.org/standard/66457.html	ISO 3082:2017 - Iron ores — Sampling and sample preparation procedures
+ISO 11737-2	https://www.iso.org/standard/68208.html	ISO/IEC 23008-5:2015/Amd 1:2016 - Information technology — High efficiency coding and media delivery in heterogeneous environments — Part 5: Reference software for high efficiency video coding — Amendment 1: Reference software for format range extensions profiles
+ISO 11737-3	https://www.iso.org/standard/79140.html	ERROR: HTTP Error 404: Not Found
+ISO 17664-1	https://www.iso.org/standard/67416.html	ISO 14817-3:2017 - Intelligent transport systems — ITS data dictionaries — Part 3: Object identifier assignments for ITS data concepts
+ISO 17664-2	https://www.iso.org/standard/80075.html	ERROR: HTTP Error 404: Not Found
+ISO 17665	https://www.iso.org/standard/72820.html	ISO 180:2019 - Plastics — Determination of Izod impact strength
+ISO 11607-1	https://www.iso.org/standard/74956.html	ERROR: HTTP Error 404: Not Found
+ISO 11607-2	https://www.iso.org/standard/74957.html	ISO 10360-13:2021 - Geometrical product specifications (GPS) — Acceptance and reverification tests for coordinate measuring systems (CMS) — Part 13: Optical 3D CMS
+ISO 15225	https://www.iso.org/standard/65047.html	ISO/IEC 10646:2014/Amd 1:2015 - Information technology — Universal Coded Character Set (UCS) — Amendment 1: Cherokee supplement and other characters
+ISO 10555-1	https://www.iso.org/standard/56471.html	ERROR: HTTP Error 404: Not Found
+ISO 11070	https://www.iso.org/standard/74946.html	ISO 15671:2023 - Rubber and rubber products — Determination of total sulfur content using an automatic analyser
+ISO 80601-2-55	https://www.iso.org/standard/80200.html	ISO 17555:2021 - Plastics — Film and sheeting — Biaxially oriented polypropylene (PP) films
+ISO 10993-10	https://www.iso.org/standard/76063.html	ERROR: HTTP Error 404: Not Found
+ISO 10993-14	https://www.iso.org/standard/32338.html	ISO 11056:1999 - Sensory analysis — Methodology — Magnitude estimation method
+ISO 10993-17	https://www.iso.org/standard/74649.html	ERROR: HTTP Error 404: Not Found
+ISO 10993-13	https://www.iso.org/standard/44626.html	ERROR: HTTP Error 404: Not Found
+ISO 10993-15	https://www.iso.org/standard/72051.html	ISO 14852:2018 - Determination of the ultimate aerobic biodegradability of plastic materials in an aqueous medium — Method by analysis of evolved carbon dioxide
+ISO 10993-11	https://www.iso.org/standard/60153.html	ISO 10362-2:2013 - Cigarettes — Determination of water in smoke condensates — Part 2: Karl Fischer method
+ISO 10993-18	https://www.iso.org/standard/72059.html	ISO 10303-242:2014/Cor 1:2016 - Industrial automation systems and integration — Product data representation and exchange — Part 242: Application protocol: Managed model-based 3D engineering — Technical Corrigendum 1
+ISO 10993-12	https://www.iso.org/standard/77402.html	ISO 18768-1:2022 - Organic coatings on aluminium and its alloys — Methods for specifying decorative and protective organic coatings on aluminium — Part 1: Powder coatings

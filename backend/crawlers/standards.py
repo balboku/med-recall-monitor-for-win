@@ -92,12 +92,26 @@ class StandardsCrawler(BaseCrawler):
         # ISO 頁面結構
         # 找標題 (含年份)
         title_el = soup.find("h1") or soup.select_one(".std-title")
+        base_number = ""
         if title_el:
             title_text = title_el.get_text(strip=True)
             match = re.search(r":(\d{4})", title_text)
             if match:
                 info["version_year"] = match.group(1)
             info["full_title"] = title_text
+            base_number = title_text.split(':')[0].strip()
+
+        # 找 Amendment (例如 ISO 8601-1:2019/Amd 1:2022)
+        html_text = soup.get_text()
+        if base_number:
+            import re
+            escaped_base = re.escape(base_number)
+            # 支援如 2019/Amd 1:2022 或是含多個 Amd/Cor 的寫法
+            amd_pattern = rf'{escaped_base}:(\d{{4}}[/\+](?:(?:Amd|Cor)\s*\w+:\d{{4}}[/\+]*)+)'
+            amd_matches = re.findall(amd_pattern, html_text, re.IGNORECASE)
+            if amd_matches:
+                info["version_year"] = amd_matches[-1].strip('+').strip('/')
+                info["full_title"] = f"{base_number}:{info['version_year']}"
 
         # 找 Edition
         edition_el = soup.find(string=re.compile(r"Edition\s*:\s*\d", re.IGNORECASE))
@@ -123,10 +137,45 @@ class StandardsCrawler(BaseCrawler):
         status_el = soup.select_one(".stage-code") or soup.find(string=re.compile(r"Status\s*:", re.IGNORECASE))
         if status_el:
             info["status"] = status_el.get_text(strip=True) if hasattr(status_el, 'get_text') else str(status_el).strip()
+        else:
+            # 部分 ISO 頁面僅以獨立文字節點顯示 "Withdrawn" / "Published"，沒有 "Status:" 前綴
+            badge_el = soup.find(string=re.compile(r"^\s*(Withdrawn|Published)\s*$"))
+            if badge_el:
+                info["status"] = badge_el.strip()
+
+        # 找「New version available」/「Revised by」區塊，偵測標準是否已有新版本取代
+        # 例如 Withdrawn 的 ISO 2859-1:1999 頁面會顯示
+        # "New version available: ISO 2859-1:2026"，連結指向新版頁面
+        new_ver_node = soup.find(string=re.compile(r"(New version available|Revised by)", re.IGNORECASE))
+        if new_ver_node:
+            container = new_ver_node.parent
+            link = container.find("a") if container else None
+            if not link and container and container.parent:
+                link = container.parent.find("a")
+            if link and link.get("href"):
+                new_title = link.get_text(strip=True)
+                year_match = re.search(r":(\d{4})", new_title)
+                if year_match:
+                    info["new_edition_title"] = new_title
+                    info["new_edition_url"] = link.get("href", "")
+                    info["new_edition_year"] = year_match.group(1)
 
         return info
 
-    async def _check_standard(self, standard_number: str, source_url: str) -> dict:
+    def _extract_base_number(self, title: str) -> str:
+        """從標準標題擷取基本編號（去除年份/修正案資訊），例如：
+        'ISO 2859-1:1999' -> 'ISO 2859-1'
+        'ISO 15223-1 2021 Amd 1 2025' -> 'ISO 15223-1'
+        'IEC/TR 80002-1:2009' -> 'IEC/TR 80002-1'
+        """
+        if not title:
+            return ""
+        match = re.match(r"\s*((?:ISO|IEC)(?:/TR|/TS)?\s*[\d]+(?:[-/]\d+)*)", title, re.IGNORECASE)
+        if match:
+            return re.sub(r"\s+", " ", match.group(1).strip())
+        return title.split(':')[0].strip()
+
+    async def _check_standard(self, standard_number: str, source_url: str, expected_title: str = "") -> dict:
         """檢查單一標準的最新版本"""
         try:
             response = await self.get(source_url)
@@ -138,6 +187,25 @@ class StandardsCrawler(BaseCrawler):
                 info = self._parse_iso_page(html)
             else:
                 info = {}
+
+            # 驗證抓回的標準編號是否與預期一致，避免 source_url 指向錯誤文件
+            # (例如資料庫記錄為 ISO 2859-1，但 source_url 卻指向 ISO 11661 的頁面)
+            expected_base = self._extract_base_number(expected_title)
+            found_base = self._extract_base_number(info.get("full_title", ""))
+            if (
+                expected_base
+                and found_base
+                and self._normalize_base_number(expected_base) != self._normalize_base_number(found_base)
+            ):
+                logger.warning(
+                    f"[{self.name}] {standard_number} 來源網址不符: "
+                    f"預期「{expected_base}」，實際取得「{found_base}」 ({source_url})"
+                )
+                return {
+                    "title_mismatch": True,
+                    "expected_title": expected_title,
+                    "found_title": info.get("full_title", ""),
+                }
 
             # 組合版本字串
             version = ""
@@ -151,6 +219,9 @@ class StandardsCrawler(BaseCrawler):
                 "publication_date": info.get("publication_date", ""),
                 "status": info.get("status", ""),
                 "title": info.get("full_title", ""),
+                "new_edition_title": info.get("new_edition_title", ""),
+                "new_edition_url": info.get("new_edition_url", ""),
+                "new_edition_year": info.get("new_edition_year", ""),
             }
 
         except Exception as e:
@@ -160,6 +231,11 @@ class StandardsCrawler(BaseCrawler):
     def _normalize_version(self, version: str) -> str:
         """標準化版本字串以利比對（移除空白、統一大小寫）"""
         return version.strip().lower().replace(" ", "") if version else ""
+
+    def _normalize_base_number(self, base: str) -> str:
+        """標準化標準基本編號以利比對，移除所有非英數字元
+        （避免 'IEC/TR 80002-1' 與 'IEC TR 80002-1' 等格式差異造成誤判）"""
+        return re.sub(r"[^a-z0-9]", "", base.lower()) if base else ""
 
     def _is_under_revision(self, status_str: str) -> bool:
         """P2-4: 判斷標準是否進入修訂中狀態"""
@@ -178,16 +254,66 @@ class StandardsCrawler(BaseCrawler):
             if not row:
                 return False
 
+            # 來源網址查到的標準與資料庫記錄不符（指向錯誤文件）
+            # 不更新版本資訊，避免產生誤導的「有更新」提示，僅記錄查核失敗並建立警示
+            if latest_info.get("title_mismatch"):
+                mismatch_note = "⚠️ 來源網址查核失敗，請確認 source_url"
+                notes = row["notes"] or ""
+                if mismatch_note not in notes:
+                    notes = f"{notes} {mismatch_note}".strip()
+
+                conn.execute("""
+                    UPDATE standards SET
+                        notes = ?,
+                        last_checked = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                """, (
+                    notes,
+                    datetime.now().isoformat(),
+                    datetime.now().isoformat(),
+                    standard_id,
+                ))
+                conn.commit()
+
+                self.create_alert(
+                    alert_type="standard_url_mismatch",
+                    title=f"⚠️ 標準來源網址不符: {row['standard_number']}",
+                    message=(
+                        f"預期文件「{latest_info.get('expected_title', row['title'])}」，"
+                        f"但 source_url 查到的是「{latest_info.get('found_title', '')}」，"
+                        f"目前網址: {row['source_url']}，請至追蹤設定修正來源網址。"
+                    ),
+                    source="IEC/ISO",
+                    reference_id=standard_id,
+                    reference_table="standards",
+                )
+                return False
+
             current_version = self._normalize_version(row["latest_version"] or row["current_version"] or "")
             new_version = self._normalize_version(latest_info.get("version", ""))
             status_str = latest_info.get("status", "")
+
+            # 偵測「已有新版本發布」(例如目前追蹤頁面顯示 Withdrawn，
+            # 且頁面上標示 New version available: ISO 2859-1:2026)
+            new_edition_year = latest_info.get("new_edition_year", "")
+            is_new_edition = bool(
+                new_edition_year
+                and self._normalize_version(new_edition_year) != current_version
+            )
+            if is_new_edition:
+                new_version = self._normalize_version(new_edition_year)
 
             # has_update 枚舉: 0=無變化, 1=版本更新, 2=進入修訂中
             has_update = 0
             if self._is_under_revision(status_str):
                 has_update = 2  # 標準進入修訂中，預告即將更版，需提前關注
             elif new_version and current_version and new_version != current_version:
-                has_update = 1  # 版本號有實質變化
+                has_update = 1  # 版本號有實質變化（含已發布新版本的情況）
+
+            latest_version_value = latest_info.get("version") or row["latest_version"] or row["current_version"]
+            if is_new_edition:
+                latest_version_value = new_edition_year
 
             conn.execute("""
                 UPDATE standards SET
@@ -198,7 +324,7 @@ class StandardsCrawler(BaseCrawler):
                     updated_at = ?
                 WHERE id = ?
             """, (
-                latest_info.get("version") or row["latest_version"] or row["current_version"],
+                latest_version_value,
                 status_str or None,
                 has_update,
                 datetime.now().isoformat(),
@@ -206,6 +332,22 @@ class StandardsCrawler(BaseCrawler):
                 standard_id,
             ))
             conn.commit()
+
+            if is_new_edition and has_update:
+                self.create_alert(
+                    alert_type="standard_new_edition",
+                    title=f"📢 標準已有新版本: {row['standard_number']}",
+                    message=(
+                        f"{latest_info.get('new_edition_title', '')} 已發布，"
+                        f"取代目前追蹤的 {row['title']}。"
+                        f"新版頁面: {latest_info.get('new_edition_url', '')}"
+                    ),
+                    source="IEC/ISO",
+                    reference_id=standard_id,
+                    reference_table="standards",
+                )
+                latest_info["_new_edition_alert_created"] = True
+
             return has_update > 0  # 版本更新或進入修訂中都算有更新
         finally:
             conn.close()
@@ -269,7 +411,9 @@ class StandardsCrawler(BaseCrawler):
                 grp_checked = 0
                 grp_updated = 0
                 for std in stds:
-                    latest_info = await self._check_standard(std["standard_number"], std["source_url"])
+                    latest_info = await self._check_standard(
+                        std["standard_number"], std["source_url"], std.get("title", "")
+                    )
                     grp_checked += 1
 
                     if latest_info:
@@ -277,24 +421,26 @@ class StandardsCrawler(BaseCrawler):
                         if updated:
                             grp_updated += 1
                             has_update_val = self._is_under_revision(latest_info.get("status", ""))
-                            alert_msg = (
-                                f"標準 {std['standard_number']} 進入修訂中狀態，請關注後續版本發布"
-                                if has_update_val
-                                else f"最新版本: {latest_info.get('version', 'N/A')}"
-                            )
-                            alert_title = (
-                                f"⚠️ 標準修訂中: {std['standard_number']}"
-                                if has_update_val
-                                else f"📋 標準更新: {std['standard_number']}"
-                            )
-                            self.create_alert(
-                                alert_type="standard_update",
-                                title=alert_title,
-                                message=alert_msg,
-                                source="IEC/ISO",
-                                reference_id=std["id"],
-                                reference_table="standards",
-                            )
+                            # 「已有新版本發布」的提醒已在 _update_standard 內建立，這裡不重複建立
+                            if not latest_info.get("_new_edition_alert_created"):
+                                alert_msg = (
+                                    f"標準 {std['standard_number']} 進入修訂中狀態，請關注後續版本發布"
+                                    if has_update_val
+                                    else f"最新版本: {latest_info.get('version', 'N/A')}"
+                                )
+                                alert_title = (
+                                    f"⚠️ 標準修訂中: {std['standard_number']}"
+                                    if has_update_val
+                                    else f"📋 標準更新: {std['standard_number']}"
+                                )
+                                self.create_alert(
+                                    alert_type="standard_update",
+                                    title=alert_title,
+                                    message=alert_msg,
+                                    source="IEC/ISO",
+                                    reference_id=std["id"],
+                                    reference_table="standards",
+                                )
                 return grp_checked, grp_updated
 
             logger.info(f"[{self.name}] 正在並行處理 {len(domain_groups)} 個網站來源...")

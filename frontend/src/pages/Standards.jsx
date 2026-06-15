@@ -265,7 +265,7 @@ export default function Standards() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>法規標準名稱</th>
+                  <th>文件編號 / 法規名稱</th>
                   <th style={{ width: '160px' }}>當前版本</th>
                   <th style={{ width: '160px' }}>最新同步版本</th>
                   <th style={{ width: '180px' }}>上次檢查時間</th>
@@ -280,9 +280,16 @@ export default function Standards() {
                   }}>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <span style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--text-primary)' }}>
-                          {s.title}
-                        </span>
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          {s.standard_number && (
+                            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', marginBottom: '2px' }}>
+                              {s.standard_number}
+                            </span>
+                          )}
+                          <span style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--text-primary)' }}>
+                            {s.title}
+                          </span>
+                        </div>
                         {s.has_update && (
                           <span className="tag tag-amber" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <RotateCcw size={12} /> 有新版本
@@ -350,7 +357,7 @@ export default function Standards() {
 
       {/* Modal */}
       {showModal && (
-        <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && setShowModal(false)}>
+        <div className="modal-overlay">
           <div className="modal" style={{ maxWidth: '600px' }}>
             <div className="modal-header">
               <h2 style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -363,13 +370,13 @@ export default function Standards() {
             </div>
             <div className="modal-body">
               <div className="form-group">
-                <label className="form-label">標準編號 <span style={{ color: 'var(--accent-danger)' }}>*</span></label>
+                <label className="form-label">公司文件編號 <span style={{ color: 'var(--accent-danger)' }}>*</span></label>
                 <input className="form-input" value={form.standard_number}
                   onChange={(e) => setForm({ ...form, standard_number: e.target.value })}
-                  placeholder="例：IEC 60601-1" autoFocus />
+                  placeholder="例：R101-0001-01" autoFocus />
               </div>
               <div className="form-group">
-                <label className="form-label">完整標題 <span style={{ color: 'var(--accent-danger)' }}>*</span></label>
+                <label className="form-label">法規名稱 <span style={{ color: 'var(--accent-danger)' }}>*</span></label>
                 <input className="form-input" value={form.title}
                   onChange={(e) => setForm({ ...form, title: e.target.value })}
                   placeholder="例：Medical electrical equipment - General requirements" />
