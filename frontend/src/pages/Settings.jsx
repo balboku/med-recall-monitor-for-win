@@ -22,6 +22,8 @@ import {
   Terminal,
   X,
   Languages,
+  Search,
+  Layers,
 } from 'lucide-react';
 
 const crawlerMeta = {
@@ -69,6 +71,11 @@ export default function Settings() {
   const [crawling, setCrawling] = useState({});
   const [modalState, setModalState] = useState({ open: false, crawler: null });
   const [selectedProductIds, setSelectedProductIds] = useState(new Set());
+  // 法規標準更新 modal：類別(全部/個別可複選) + 執行方式(例行/虛擬瀏覽器搜尋)
+  const [stdScanOpen, setStdScanOpen] = useState(false);
+  const [stdCatMode, setStdCatMode] = useState('all');     // 'all' | 'individual'
+  const [stdCats, setStdCats] = useState(new Set());
+  const [stdExecMode, setStdExecMode] = useState('routine'); // 'routine' | 'browser'
   const [announcementText, setAnnouncementText] = useState('');
   const [savingAnnouncement, setSavingAnnouncement] = useState(false);
   const [logPage, setLogPage] = useState(1);
@@ -82,6 +89,16 @@ export default function Settings() {
     queryKey: ['products'],
     queryFn: api.getProducts,
   });
+
+  const { data: standardsData = [] } = useQuery({
+    queryKey: ['standards'],
+    queryFn: api.getStandards,
+  });
+
+  // 法規分類清單（取自 standards.notes）
+  const standardCategories = Array.from(
+    new Set(standardsData.map((s) => s.notes).filter((n) => n && typeof n === 'string'))
+  ).sort();
 
   const { data: crawlLogs = [], isFetching: loading } = useQuery({
     queryKey: ['crawlLogs'],
@@ -154,6 +171,23 @@ export default function Settings() {
     } finally {
       setCrawling((prev) => ({ ...prev, [key]: false }));
     }
+  };
+
+  const openStandardsScan = () => {
+    setStdCatMode('all');
+    setStdCats(new Set());
+    setStdExecMode('routine');
+    setStdScanOpen(true);
+  };
+
+  const handleStandardsScan = async () => {
+    const categories = stdCatMode === 'all' ? ['all'] : Array.from(stdCats);
+    if (stdCatMode === 'individual' && categories.length === 0) {
+      toast.error('請至少選擇一個類別');
+      return;
+    }
+    setStdScanOpen(false);
+    await handleCrawl('standards', { categories, scanMode: stdExecMode });
   };
 
   const handleSaveAnnouncement = async () => {
@@ -496,7 +530,7 @@ export default function Settings() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: 'auto' }}>
                   <button
                     className="btn btn-secondary w-full justify-center"
-                    onClick={() => handleCrawl(crawler.name)}
+                    onClick={() => crawler.name === 'standards' ? openStandardsScan() : handleCrawl(crawler.name)}
                     disabled={crawling[crawler.name]}
                   >
                     {crawling[crawler.name] ? (
@@ -759,6 +793,103 @@ export default function Settings() {
                   disabled={selectedProductIds.size === 0}
                 >
                   確認開始
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 法規標準更新 — 類別 + 執行方式 */}
+        {stdScanOpen && (
+          <div style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+          }}>
+            <div className="glass-card" style={{ width: '520px', maxWidth: '92vw', padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px', maxHeight: '88vh', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Terminal size={20} className="text-accent-success" /> 法規標準更新
+                </h3>
+                <button onClick={() => setStdScanOpen(false)} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* 步驟一：類別 */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.95rem' }}>
+                  <Layers size={16} /> 1. 選擇類別
+                </div>
+                <div style={{ display: 'flex', gap: '16px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+                    <input type="radio" name="stdCatMode" checked={stdCatMode === 'all'}
+                      onChange={() => setStdCatMode('all')} style={{ accentColor: 'var(--accent-blue)' }} />
+                    全部
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+                    <input type="radio" name="stdCatMode" checked={stdCatMode === 'individual'}
+                      onChange={() => setStdCatMode('individual')} style={{ accentColor: 'var(--accent-blue)' }} />
+                    個別（可複選）
+                  </label>
+                </div>
+                {stdCatMode === 'individual' && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', maxHeight: '200px', overflowY: 'auto', border: '1px solid var(--glass-border)', borderRadius: '8px', padding: '10px' }}>
+                    {standardCategories.length === 0 ? (
+                      <div style={{ color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>尚無分類</div>
+                    ) : standardCategories.map((cat) => (
+                      <label key={cat} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.85rem', padding: '2px' }}>
+                        <input type="checkbox" checked={stdCats.has(cat)}
+                          onChange={(e) => {
+                            const next = new Set(stdCats);
+                            if (e.target.checked) next.add(cat); else next.delete(cat);
+                            setStdCats(next);
+                          }}
+                          style={{ accentColor: 'var(--accent-blue)' }} />
+                        {cat}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* 步驟二：執行方式 */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.95rem' }}>2. 選擇執行方式</div>
+                {[
+                  { v: 'routine', icon: <Play size={16} />, t: '例行執行', d: '讀取各標準已設定的官方來源網址，直接判讀版本更新。' },
+                  { v: 'browser', icon: <Search size={16} />, t: '啟動虛擬瀏覽器搜尋', d: '到 ISO 官網依法規名稱搜尋官方頁面並回填網址（目前僅支援 ISO 類別，其餘略過）。' },
+                ].map((opt) => (
+                  <label key={opt.v} style={{
+                    display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer',
+                    border: stdExecMode === opt.v ? '1px solid var(--accent-blue)' : '1px solid var(--glass-border)',
+                    background: stdExecMode === opt.v ? 'rgba(59,130,246,0.08)' : 'transparent',
+                    borderRadius: '8px', padding: '12px',
+                  }}>
+                    <input type="radio" name="stdExecMode" checked={stdExecMode === opt.v}
+                      onChange={() => setStdExecMode(opt.v)} style={{ accentColor: 'var(--accent-blue)', marginTop: '3px' }} />
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        {opt.icon} {opt.t}
+                      </div>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginTop: '3px' }}>{opt.d}</div>
+                    </div>
+                  </label>
+                ))}
+                {stdExecMode === 'browser' && (
+                  <div style={{ fontSize: '0.78rem', color: 'var(--accent-warning)' }}>
+                    ⚠️ 虛擬瀏覽器搜尋會逐筆開啟瀏覽器、較耗時，且目前僅處理 ISO 類別（需本機 Chrome）。
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', marginTop: '4px' }}>
+                <button className="btn btn-secondary flex-1 justify-center" onClick={() => setStdScanOpen(false)}>
+                  取消
+                </button>
+                <button className="btn btn-primary flex-1 justify-center" onClick={handleStandardsScan}
+                  disabled={crawling.standards}>
+                  <Play size={16} /> 開始更新
                 </button>
               </div>
             </div>

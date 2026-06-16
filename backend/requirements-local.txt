@@ -14,3 +14,8 @@ redis==5.0.1
 celery==5.3.6
 prometheus-fastapi-instrumentator==7.0.0
 watchdog==4.0.1
+# ISO Life cycle 版本檢查（虛擬瀏覽器）用：規避 Cloudflare CDP 偵測，需搭配本機 Chrome
+# 注意：nodriver 0.50.x 在 Python 3.14 下，其 cdp/network.py 含非 UTF-8 註解位元組會
+#       導致 import 失敗；安裝後若 import 報 SyntaxError(Non-UTF-8)，將該檔內所有 >=128
+#       的位元組替換為 '?' 即可（純註解，不影響功能）。詳見 scripts/iso_lifecycle_check.py。
+nodriver==0.50.3

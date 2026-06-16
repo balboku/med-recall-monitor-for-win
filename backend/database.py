@@ -504,11 +504,35 @@ def migrate_db():
         if DATABASE_URL:
             conn.rollback()
 
+    # ---- 清理被污染的「分類」(notes)：移除「來源網址查核失敗」訊息 ----
+    # 舊版曾將查核失敗訊息附加到 notes（同時作為分類），產生
+    # 「ISO ⚠️ 來源網址查核失敗…」「IEC ⚠️ …」這類假類別。
+    # 此處還原為原分類（ISO/IEC）；若還原後為空，再依法規名稱前綴推斷。
+    notes_cleaned = 0
+    try:
+        rows = cursor.execute(
+            "SELECT id, title, notes FROM standards WHERE notes LIKE '%查核失敗%'"
+        ).fetchall()
+        for row in rows:
+            notes = row["notes"] or ""
+            cleaned = re.sub(r"\s*⚠.*source_url\s*$", "", notes).strip()
+            if not cleaned:
+                t = (row["title"] or "").strip().upper()
+                cleaned = "ISO" if t.startswith("ISO") else ("IEC" if t.startswith("IEC") else "")
+            if cleaned != notes:
+                cursor.execute("UPDATE standards SET notes = ? WHERE id = ?", (cleaned, row["id"]))
+                notes_cleaned += 1
+        conn.commit()
+    except Exception:
+        if DATABASE_URL:
+            conn.rollback()
+
     conn.commit()
     conn.close()
     print(f"Database migration completed, applied {migrated} column updates, "
           f"normalized {standards_normalized} standards titles, "
-          f"applied {iso_mapping_applied} ISO standard mapping updates")
+          f"applied {iso_mapping_applied} ISO standard mapping updates, "
+          f"cleaned {notes_cleaned} polluted standard categories")
 
 
 def write_audit_log(conn, operator: str, action: str, target_table: str,

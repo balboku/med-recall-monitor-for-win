@@ -204,12 +204,17 @@ class CrawlRequest(BaseModel):
     historical: bool = False
     product_ids: Optional[List[int]] = None
     standard_id: Optional[int] = None
+    # 法規標準專用：分類過濾(notes)與執行模式
+    categories: Optional[List[str]] = None   # None / 含 'all' 表示全部
+    scan_mode: Optional[str] = None          # 'routine' 例行 | 'browser' 虛擬瀏覽器搜尋
 
 @app.post("/api/crawl/{crawler_name}")
 async def trigger_crawl(crawler_name: str, payload: Optional[CrawlRequest] = None):
     historical = payload.historical if payload else False
     product_ids = payload.product_ids if payload else None
     standard_id = payload.standard_id if payload else None
+    categories = payload.categories if payload else None
+    scan_mode = (payload.scan_mode if payload else None) or "routine"
 
     valid_crawlers = ["fda_recall", "fda_maude", "tfda", "standards", "all"]
     if crawler_name not in valid_crawlers:
@@ -234,13 +239,18 @@ async def trigger_crawl(crawler_name: str, payload: Optional[CrawlRequest] = Non
             "dispatch_mode": mode,
         }
 
-    mode = enqueue_crawler(crawler_name, historical, product_ids, standard_id)
+    mode = enqueue_crawler(
+        crawler_name, historical, product_ids, standard_id,
+        categories=categories, scan_mode=scan_mode,
+    )
     logger.info(
-        "Triggered crawler=%s historical=%s product_ids=%s standard_id=%s via %s",
+        "Triggered crawler=%s historical=%s product_ids=%s standard_id=%s categories=%s scan_mode=%s via %s",
         crawler_name,
         historical,
         product_ids,
         standard_id,
+        categories,
+        scan_mode,
         mode,
     )
     return {

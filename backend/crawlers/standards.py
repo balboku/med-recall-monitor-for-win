@@ -104,7 +104,6 @@ class StandardsCrawler(BaseCrawler):
         # 找 Amendment (例如 ISO 8601-1:2019/Amd 1:2022)
         html_text = soup.get_text()
         if base_number:
-            import re
             escaped_base = re.escape(base_number)
             # 支援如 2019/Amd 1:2022 或是含多個 Amd/Cor 的寫法
             amd_pattern = rf'{escaped_base}:(\d{{4}}[/\+](?:(?:Amd|Cor)\s*\w+:\d{{4}}[/\+]*)+)'
@@ -199,15 +198,29 @@ class StandardsCrawler(BaseCrawler):
     async def _check_standard(self, standard_number: str, source_url: str, expected_title: str = "") -> dict:
         """檢查單一標準的最新版本"""
         try:
-            response = await self.get(source_url)
-            html = response.text
-
-            if "iec.ch" in source_url:
-                info = self._parse_iec_page(html)
-            elif "iso.org" in source_url:
+            if "iso.org" in source_url:
+                # www.iso.org 受 Cloudflare 防護，純 HTTP 會 403，改用虛擬瀏覽器取得頁面。
+                # 瀏覽器須在獨立工作執行緒以全新事件迴圈執行（見 iso_browser 說明），
+                # 故以 asyncio.to_thread 呼叫，避免與目前事件迴圈巢狀。
+                import asyncio as _asyncio
+                from crawlers import iso_browser
+                if iso_browser.BROWSER_AVAILABLE:
+                    html = await _asyncio.to_thread(iso_browser.fetch_html_sync, source_url)
+                else:
+                    logger.warning(
+                        f"[{self.name}] 未安裝虛擬瀏覽器(nodriver)，改用 HTTP 抓取 ISO 頁面"
+                        f"（可能被 Cloudflare 擋下）: {source_url}"
+                    )
+                    response = await self.get(source_url)
+                    html = response.text
                 info = self._parse_iso_page(html)
             else:
-                info = {}
+                response = await self.get(source_url)
+                html = response.text
+                if "iec.ch" in source_url:
+                    info = self._parse_iec_page(html)
+                else:
+                    info = {}
 
             # 驗證抓回的標準編號是否與預期一致，避免 source_url 指向錯誤文件
             # (例如資料庫記錄為 ISO 2859-1，但 source_url 卻指向 ISO 11661 的頁面)
@@ -313,21 +326,16 @@ class StandardsCrawler(BaseCrawler):
                 return False
 
             # 來源網址查到的標準與資料庫記錄不符（指向錯誤文件）
-            # 不更新版本資訊，避免產生誤導的「有更新」提示，僅記錄查核失敗並建立警示
+            # 不更新版本資訊，避免產生誤導的「有更新」提示，僅記錄查核失敗並建立警示。
+            # 注意：「分類」(notes) 不可寫入查核失敗訊息，否則會污染分類（產生
+            # 「ISO ⚠️ 來源網址查核失敗…」這類假類別）；查核失敗僅以 alert 呈現。
             if latest_info.get("title_mismatch"):
-                mismatch_note = "⚠️ 來源網址查核失敗，請確認 source_url"
-                notes = row["notes"] or ""
-                if mismatch_note not in notes:
-                    notes = f"{notes} {mismatch_note}".strip()
-
                 conn.execute("""
                     UPDATE standards SET
-                        notes = ?,
                         last_checked = ?,
                         updated_at = ?
                     WHERE id = ?
                 """, (
-                    notes,
                     datetime.now().isoformat(),
                     datetime.now().isoformat(),
                     standard_id,
@@ -452,36 +460,168 @@ class StandardsCrawler(BaseCrawler):
         finally:
             conn.close()
 
-    async def run(self, historical: bool = False, product_ids: list = None, standard_id: int = None, **kwargs):
-        """執行標準版本檢查"""
+    def _is_iso_standard(self, std: dict) -> bool:
+        """判斷標準是否屬於 ISO 類別（虛擬瀏覽器搜尋目前僅支援 ISO）。
+        以分類(notes)為主，並輔以法規名稱(title)是否以 ISO 開頭。"""
+        notes = (std.get("notes") or "").strip()
+        title = (std.get("title") or "").strip().upper()
+        return notes == "ISO" or title.startswith("ISO")
+
+    def _apply_browser_result(self, std: dict, result: dict) -> bool:
+        """將虛擬瀏覽器搜尋結果回寫資料庫（官方網址、最新查找版本/日期、是否有更新），
+        並於判定有更新時建立提醒。回傳是否有更新。"""
+        now_iso = datetime.now().isoformat()
+        has_update = 1 if result.get("has_update") else 0
+        latest_version = result.get("now_year") or result.get("now_title") or ""
+
+        conn = get_db()
+        try:
+            conn.execute("""
+                UPDATE standards SET
+                    source_url = ?,
+                    latest_version = ?,
+                    last_checked = ?,
+                    has_update = ?,
+                    status = COALESCE(?, status),
+                    updated_at = ?
+                WHERE id = ?
+            """, (
+                result.get("source_url") or std.get("source_url") or "",
+                latest_version,
+                now_iso,
+                has_update,
+                result.get("now_status") or None,
+                now_iso,
+                std["id"],
+            ))
+            conn.commit()
+        finally:
+            conn.close()
+
+        if has_update:
+            # 依「ISO 法規版本更新判定邏輯規則」的判定結果建立提醒
+            label = result.get("judge_label", "📢 有更新")
+            judge_msg = result.get("judge_message") or (
+                f"目前版本 {std.get('current_version') or '未註記'} 與官網現行版 "
+                f"{result.get('now_status')} {result.get('now_title')} 不同")
+            self.create_alert(
+                alert_type="standard_new_edition",
+                title=f"{label}: {std['standard_number']} {std.get('title')}",
+                message=f"{judge_msg}（文件類型: {result.get('doc_type', '?')}；來源: {result.get('source_url')}）",
+                source="IEC/ISO",
+                reference_id=std["id"],
+                reference_table="standards",
+            )
+        return bool(has_update)
+
+    async def _browser_search_batch(self, standards: list):
+        """以『單一共用瀏覽器視窗』批量搜尋整批標準的 Life cycle（全程只開一次視窗）。
+        回傳 (checked, updated, skipped)。目前僅支援 ISO 類別，其餘類別略過。"""
+        import asyncio as _asyncio
+        from crawlers import iso_browser
+
+        # 篩出 ISO 標準（其餘略過），並建立批次清單
+        iso_items = []
+        std_by_key = {}
+        skipped = 0
+        for std in standards:
+            if self._is_iso_standard(std):
+                key = str(std["id"])
+                std_by_key[key] = std
+                iso_items.append({
+                    "key": key,
+                    "standard_name": std.get("title") or "",
+                    "current_version": std.get("current_version") or "",
+                })
+            else:
+                skipped += 1
+                logger.info(f"[{self.name}] 略過（虛擬瀏覽器搜尋目前僅支援 ISO）: {std.get('standard_number')}")
+
+        if not iso_items:
+            return 0, 0, skipped
+        if not iso_browser.BROWSER_AVAILABLE:
+            logger.warning(f"[{self.name}] 未安裝虛擬瀏覽器(nodriver)，無法執行搜尋，略過 {len(iso_items)} 筆")
+            return 0, 0, skipped + len(iso_items)
+
+        # 共用單一瀏覽器視窗依序處理整批（全部完成後才關閉視窗）
+        results = await _asyncio.to_thread(iso_browser.resolve_many_sync, iso_items)
+
+        checked = 0
+        updated = 0
+        for key, std in std_by_key.items():
+            result = results.get(key)
+            checked += 1
+            if not result or not result.get("ok"):
+                logger.warning(
+                    f"[{self.name}] {std.get('standard_number')} 搜尋無相符結果: "
+                    f"{(result or {}).get('error', '無回傳')}"
+                )
+                continue
+            if self._apply_browser_result(std, result):
+                updated += 1
+        return checked, updated, skipped
+
+    async def run(self, historical: bool = False, product_ids: list = None, standard_id: int = None,
+                  categories: list = None, mode: str = "routine", **kwargs):
+        """執行標準版本檢查。
+
+        categories: 法規分類(notes)過濾清單；None / 空 / 含 'all' 表示全部。
+        mode: 'routine' 例行執行（讀取已設定的 source_url 判讀）；
+              'browser' 啟動虛擬瀏覽器到官網搜尋（目前僅支援 ISO 類別）。
+        """
         started_at = datetime.now().isoformat()
         log_id = self.start_crawl_log(started_at)
         total_checked = 0
         total_updated = 0
 
+        # 正規化分類過濾：None / 空 / 含 'all' → 全部（cat_filter=None）
+        cat_filter = None
+        if categories:
+            cats = [c for c in categories if c and c != "all"]
+            if cats and "all" not in categories:
+                cat_filter = cats
+
         conn = get_db()
         try:
             if standard_id:
-                standards = conn.execute("SELECT * FROM standards WHERE id = ?", (standard_id,)).fetchall()
+                rows = conn.execute("SELECT * FROM standards WHERE id = ?", (standard_id,)).fetchall()
+            elif cat_filter:
+                placeholders = ",".join("?" * len(cat_filter))
+                rows = conn.execute(
+                    f"SELECT * FROM standards WHERE notes IN ({placeholders})", tuple(cat_filter)
+                ).fetchall()
             else:
-                standards = conn.execute("SELECT * FROM standards").fetchall()
-            standards = [dict(row) for row in standards]
+                rows = conn.execute("SELECT * FROM standards").fetchall()
+            standards = [dict(row) for row in rows]
         finally:
             conn.close()
 
         if not standards:
-            logger.info(f"[{self.name}] 無追蹤的標準，初始化預設清單")
-            self.init_default_standards()
+            # 僅在「全庫」為空時初始化預設清單；分類過濾後為空則直接結束
+            if not standard_id and not cat_filter:
+                logger.info(f"[{self.name}] 無追蹤的標準，初始化預設清單")
+                self.init_default_standards()
             self.finish_crawl_log(log_id, "success", 0, 0)
             return {"checked": 0, "updated": 0}
 
-        logger.info(f"[{self.name}] 開始檢查 {len(standards)} 個標準")
+        logger.info(f"[{self.name}] 開始檢查 {len(standards)} 個標準 (mode={mode}, 分類={cat_filter or '全部'})")
+
+        # 虛擬瀏覽器搜尋模式：整批共用『單一瀏覽器視窗』，全部完成後才關閉
+        if mode == "browser":
+            try:
+                total_checked, total_updated, skipped = await self._browser_search_batch(standards)
+                self.finish_crawl_log(log_id, "success", total_checked, total_updated)
+                logger.info(f"[{self.name}] 虛擬瀏覽器搜尋完成: 檢查 {total_checked}，更新 {total_updated}，略過 {skipped}")
+                return {"checked": total_checked, "updated": total_updated, "skipped": skipped}
+            except Exception as e:
+                self.finish_crawl_log(log_id, "error", total_checked, total_updated, str(e))
+                raise
 
         try:
             from collections import defaultdict
             from urllib.parse import urlparse
             import asyncio
-            
+
             domain_groups = defaultdict(list)
             for std in standards:
                 source_url = std.get("source_url", "")

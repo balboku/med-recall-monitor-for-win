@@ -17,10 +17,11 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
-  ChevronsRight
+  ChevronsRight,
+  Search
 } from 'lucide-react';
 
-const emptyForm = { standard_number: '', title: '', current_version: '', source_url: '', notes: '' };
+const emptyForm = { standard_number: '', title: '', current_version: '', source_url: '', notes: '', latest_version: '', last_checked: '' };
 
 // 觸發掃描後，輪詢爬蟲日誌取得執行結果的設定
 const SCAN_POLL_INTERVAL_MS = 1500;
@@ -143,6 +144,7 @@ export default function Standards() {
   const [currentPage, setCurrentPage] = useState(1);
   const [filterCategory, setFilterCategory] = useState('all');
   const [scanModal, setScanModal] = useState(null);
+  const [resolving, setResolving] = useState(false);
   const itemsPerPage = 50;
 
   const { data: standards = [], isLoading: loading } = useQuery({
@@ -181,6 +183,8 @@ export default function Standards() {
       current_version: s.current_version || '',
       source_url: s.source_url || '',
       notes: s.notes || '',
+      latest_version: s.latest_version || '',
+      last_checked: s.last_checked || '',
     });
     setShowModal(true);
   };
@@ -195,6 +199,40 @@ export default function Standards() {
       setShowModal(false);
       toast.success('儲存成功');
     } catch (e) { toast.error(e.message); }
+  };
+
+  // 以虛擬瀏覽器到 ISO 官網搜尋此法規，找到官方來源網址後自動填入欄位
+  const handleResolveUrl = async () => {
+    if (!form.title.trim()) {
+      toast.error('請先填寫「法規名稱」（例如 ISO 10993-1）');
+      return;
+    }
+    setResolving(true);
+    const tId = toast.loading('正在以虛擬瀏覽器到 ISO 官網搜尋（約需數十秒）...');
+    try {
+      const res = await api.resolveStandardUrl({
+        standard_name: form.title,
+        current_version: form.current_version,
+        standard_id: editing?.id || null,
+      });
+      setForm((f) => ({
+        ...f,
+        source_url: res.source_url,
+        latest_version: res.now_year || res.now_title || f.latest_version,
+        last_checked: res.last_checked || new Date().toISOString(),
+      }));
+      // 回寫已存入資料庫，刷新清單顯示
+      queryClient.invalidateQueries({ queryKey: ['standards'] });
+      const verdict = res.judge_label || (res.has_update ? '⚠️ 偵測到新版本' : '現行版即為最新');
+      toast.success(
+        `${verdict}｜${res.found_title}（網址已填入）\n${res.judge_message || ''}`,
+        { id: tId, duration: 7000 }
+      );
+    } catch (e) {
+      toast.error(`查找失敗：${e.message}`, { id: tId });
+    } finally {
+      setResolving(false);
+    }
   };
 
   const handleDelete = async (id) => {
@@ -454,11 +492,48 @@ export default function Standards() {
                 </div>
                 <div className="form-group">
                   <label className="form-label">官方來源網址</label>
-                  <input className="form-input" value={form.source_url}
-                    onChange={(e) => setForm({ ...form, source_url: e.target.value })}
-                    placeholder="IEC/ISO 官網頁面" />
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <input className="form-input" value={form.source_url}
+                      onChange={(e) => setForm({ ...form, source_url: e.target.value })}
+                      placeholder="IEC/ISO 官網頁面" style={{ flex: 1, minWidth: 0 }} />
+                    {(form.notes || '').trim() === 'ISO' && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={handleResolveUrl}
+                        disabled={resolving || !form.title.trim()}
+                        title="以虛擬瀏覽器到 ISO 官網搜尋此法規並自動填入官方網址"
+                        style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
+                        {resolving
+                          ? <><div className="spinner" style={{ width: '14px', height: '14px' }}></div> 搜尋中</>
+                          : <><Search size={16} /> ISO 查找</>}
+                      </button>
+                    )}
+                  </div>
+                  {(form.notes || '').trim() === 'ISO' && (
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '4px', display: 'block' }}>
+                      依「法規名稱」到 ISO 官網查找官方頁面（僅針對此筆，需本機 Chrome）
+                    </span>
+                  )}
                 </div>
               </div>
+              {editing && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                  <div className="form-group">
+                    <label className="form-label">最新查找版本</label>
+                    <input className="form-input" value={form.latest_version || ''} readOnly
+                      placeholder="尚未查找"
+                      style={{ background: 'var(--bg-surface)', color: 'var(--text-secondary)', cursor: 'default' }} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">最新查找日期</label>
+                    <input className="form-input"
+                      value={form.last_checked ? new Date(form.last_checked).toLocaleString('zh-TW') : ''}
+                      readOnly placeholder="尚未查找"
+                      style={{ background: 'var(--bg-surface)', color: 'var(--text-secondary)', cursor: 'default' }} />
+                  </div>
+                </div>
+              )}
               <div className="form-group">
                 <label className="form-label">內部備註 / 應用範圍</label>
                 <textarea className="form-textarea" value={form.notes}

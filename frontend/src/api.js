@@ -44,6 +44,8 @@ export const api = {
   createStandard: (data) => request('/standards', { method: 'POST', body: JSON.stringify(data) }),
   updateStandard: (id, data) => request(`/standards/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteStandard: (id) => request(`/standards/${id}`, { method: 'DELETE' }),
+  // 以虛擬瀏覽器到 ISO 官網搜尋此法規、找到官方來源網址（編輯標準時使用）
+  resolveStandardUrl: (data) => request('/standards/resolve-url', { method: 'POST', body: JSON.stringify(data) }),
 
   // Reports（P1-3/P1-4: 含簽核狀態管理）
   getReports: () => request('/reports'),
@@ -62,7 +64,7 @@ export const api = {
   getAuditLog: (params) => request(`/analytics/audit-log?${new URLSearchParams(params)}`),
 
   // Crawl
-  triggerCrawl: (name, options = {}) => request(`/crawl/${name}`, { method: 'POST', body: JSON.stringify({ historical: options.historical || false, product_ids: options.productIds || null, standard_id: options.standardId || null }) }),
+  triggerCrawl: (name, options = {}) => request(`/crawl/${name}`, { method: 'POST', body: JSON.stringify({ historical: options.historical || false, product_ids: options.productIds || null, standard_id: options.standardId || null, categories: options.categories || null, scan_mode: options.scanMode || null }) }),
   getCrawlLogs: () => request('/crawl/logs'),
 
   // Tools
