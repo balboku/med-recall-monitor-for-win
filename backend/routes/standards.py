@@ -75,6 +75,13 @@ async def resolve_source_url(req: ResolveUrlRequest):
     return result
 
 
+@router.get("/scan-progress")
+def get_scan_progress():
+    """法規標準掃描即時進度（供系統設定頁顯示執行進度）。"""
+    import standards_progress
+    return standards_progress.get()
+
+
 @router.get("")
 def list_standards():
     """取得所有追蹤的法規標準"""

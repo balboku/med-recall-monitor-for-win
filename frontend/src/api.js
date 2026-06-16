@@ -46,6 +46,8 @@ export const api = {
   deleteStandard: (id) => request(`/standards/${id}`, { method: 'DELETE' }),
   // 以虛擬瀏覽器到 ISO 官網搜尋此法規、找到官方來源網址（編輯標準時使用）
   resolveStandardUrl: (data) => request('/standards/resolve-url', { method: 'POST', body: JSON.stringify(data) }),
+  // 法規標準掃描即時進度
+  getStandardsScanProgress: () => request('/standards/scan-progress'),
 
   // Reports（P1-3/P1-4: 含簽核狀態管理）
   getReports: () => request('/reports'),

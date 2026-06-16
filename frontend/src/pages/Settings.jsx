@@ -106,6 +106,13 @@ export default function Settings() {
     refetchInterval: 5000,
   });
 
+  // 法規標準掃描即時進度（執行中時加快輪詢）
+  const { data: scanProgress } = useQuery({
+    queryKey: ['standardsScanProgress'],
+    queryFn: api.getStandardsScanProgress,
+    refetchInterval: 2000,
+  });
+
   const { data: healthData } = useQuery({
     queryKey: ['health'],
     queryFn: api.getHealth,
@@ -526,6 +533,34 @@ export default function Settings() {
                     <div style={{ color: 'var(--accent-danger)' }}>最近錯誤: {crawler.health.error}</div>
                   )}
                 </div>
+
+                {crawler.name === 'standards' && scanProgress && scanProgress.status !== 'idle' && (() => {
+                  const total = scanProgress.total || 0;
+                  const cur = scanProgress.current || 0;
+                  const pct = total > 0 ? Math.round((cur / total) * 100) : (scanProgress.running ? 0 : 100);
+                  const barColor = scanProgress.running ? 'var(--accent-blue)'
+                    : (scanProgress.status === 'error' ? 'var(--accent-danger)' : 'var(--accent-success)');
+                  return (
+                    <div style={{ marginBottom: '16px', padding: '12px', border: '1px solid var(--glass-border)', borderRadius: '8px', background: 'rgba(255,255,255,0.02)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem', marginBottom: '8px' }}>
+                        <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
+                          {scanProgress.running
+                            ? <><RotateCw size={12} className="spinner" style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} />執行中（{scanProgress.mode === 'browser' ? '虛擬瀏覽器搜尋' : '例行執行'}）</>
+                            : (scanProgress.status === 'success' ? '✅ 已完成' : '❌ 執行失敗')}
+                        </span>
+                        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>{cur} / {total}（{pct}%）</span>
+                      </div>
+                      <div style={{ width: '100%', height: '8px', background: 'var(--bg-elevated)', borderRadius: '4px', overflow: 'hidden' }}>
+                        <div style={{ width: `${pct}%`, height: '100%', background: barColor, transition: 'width 0.4s ease' }} />
+                      </div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', marginTop: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {scanProgress.running
+                          ? `${scanProgress.current_title || '處理中...'}（已更新 ${scanProgress.updated}、略過 ${scanProgress.skipped}）`
+                          : (scanProgress.message || '')}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: 'auto' }}>
                   <button

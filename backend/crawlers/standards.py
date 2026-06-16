@@ -5,6 +5,7 @@ from datetime import datetime
 from crawlers.base import BaseCrawler
 from crawlers.html_parser import parse_html
 from database import get_db
+import standards_progress
 
 logger = logging.getLogger(__name__)
 
@@ -460,6 +461,30 @@ class StandardsCrawler(BaseCrawler):
         finally:
             conn.close()
 
+    def _cleanup_polluted_categories(self):
+        """自我修復：移除任何被舊機制污染到「分類(notes)」的『來源網址查核失敗』訊息，
+        確保 ISO/IEC 分類維持乾淨（即使先前由舊版程式或殘留資料造成）。每次掃描開始時呼叫。"""
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                "SELECT id, title, notes FROM standards WHERE notes LIKE '%查核失敗%'"
+            ).fetchall()
+            n = 0
+            for row in rows:
+                notes = row["notes"] or ""
+                cleaned = re.sub(r"\s*⚠.*source_url\s*$", "", notes).strip()
+                if not cleaned:
+                    t = (row["title"] or "").strip().upper()
+                    cleaned = "ISO" if t.startswith("ISO") else ("IEC" if t.startswith("IEC") else "")
+                if cleaned != notes:
+                    conn.execute("UPDATE standards SET notes = ? WHERE id = ?", (cleaned, row["id"]))
+                    n += 1
+            if n:
+                conn.commit()
+                logger.info(f"[{self.name}] 已清理 {n} 筆被污染的分類(notes)，還原為 ISO/IEC")
+        finally:
+            conn.close()
+
     def _is_iso_standard(self, std: dict) -> bool:
         """判斷標準是否屬於 ISO 類別（虛擬瀏覽器搜尋目前僅支援 ISO）。
         以分類(notes)為主，並輔以法規名稱(title)是否以 ISO 開頭。"""
@@ -535,31 +560,40 @@ class StandardsCrawler(BaseCrawler):
                 })
             else:
                 skipped += 1
+                standards_progress.advance(skipped=True)
                 logger.info(f"[{self.name}] 略過（虛擬瀏覽器搜尋目前僅支援 ISO）: {std.get('standard_number')}")
 
         if not iso_items:
             return 0, 0, skipped
         if not iso_browser.BROWSER_AVAILABLE:
             logger.warning(f"[{self.name}] 未安裝虛擬瀏覽器(nodriver)，無法執行搜尋，略過 {len(iso_items)} 筆")
+            for _ in iso_items:
+                standards_progress.advance(skipped=True)
             return 0, 0, skipped + len(iso_items)
 
-        # 共用單一瀏覽器視窗依序處理整批（全部完成後才關閉視窗）
-        results = await _asyncio.to_thread(iso_browser.resolve_many_sync, iso_items)
+        # 每處理完一筆即回寫資料庫並更新進度（共用單一瀏覽器視窗、全部完成後才關閉）
+        counters = {"checked": 0, "updated": 0}
 
-        checked = 0
-        updated = 0
-        for key, std in std_by_key.items():
-            result = results.get(key)
-            checked += 1
-            if not result or not result.get("ok"):
+        def on_item(key, item, result):
+            std = std_by_key.get(key)
+            if std is None:
+                return
+            standards_progress.set_current_title(std.get("title") or "")
+            counters["checked"] += 1
+            updated = False
+            if result.get("ok"):
+                updated = self._apply_browser_result(std, result)
+            else:
                 logger.warning(
                     f"[{self.name}] {std.get('standard_number')} 搜尋無相符結果: "
-                    f"{(result or {}).get('error', '無回傳')}"
+                    f"{result.get('error', '無回傳')}"
                 )
-                continue
-            if self._apply_browser_result(std, result):
-                updated += 1
-        return checked, updated, skipped
+            if updated:
+                counters["updated"] += 1
+            standards_progress.advance(updated=updated)
+
+        await _asyncio.to_thread(iso_browser.resolve_many_sync, iso_items, on_item)
+        return counters["checked"], counters["updated"], skipped
 
     async def run(self, historical: bool = False, product_ids: list = None, standard_id: int = None,
                   categories: list = None, mode: str = "routine", **kwargs):
@@ -573,6 +607,9 @@ class StandardsCrawler(BaseCrawler):
         log_id = self.start_crawl_log(started_at)
         total_checked = 0
         total_updated = 0
+
+        # 自我修復：每次掃描開始先清理任何被污染的分類（避免殘留或舊程式造成的假類別）
+        self._cleanup_polluted_categories()
 
         # 正規化分類過濾：None / 空 / 含 'all' → 全部（cat_filter=None）
         cat_filter = None
@@ -606,15 +643,25 @@ class StandardsCrawler(BaseCrawler):
 
         logger.info(f"[{self.name}] 開始檢查 {len(standards)} 個標準 (mode={mode}, 分類={cat_filter or '全部'})")
 
+        # 啟動即時進度：browser 模式每筆都會推進；routine 僅處理有 source_url 者
+        if mode == "browser":
+            progress_total = len(standards)
+        else:
+            progress_total = sum(1 for s in standards if s.get("source_url"))
+        standards_progress.start(progress_total, mode)
+
         # 虛擬瀏覽器搜尋模式：整批共用『單一瀏覽器視窗』，全部完成後才關閉
         if mode == "browser":
             try:
                 total_checked, total_updated, skipped = await self._browser_search_batch(standards)
                 self.finish_crawl_log(log_id, "success", total_checked, total_updated)
+                standards_progress.finish("success",
+                    f"完成：檢查 {total_checked}，更新 {total_updated}，略過 {skipped}")
                 logger.info(f"[{self.name}] 虛擬瀏覽器搜尋完成: 檢查 {total_checked}，更新 {total_updated}，略過 {skipped}")
                 return {"checked": total_checked, "updated": total_updated, "skipped": skipped}
             except Exception as e:
                 self.finish_crawl_log(log_id, "error", total_checked, total_updated, str(e))
+                standards_progress.finish("error", str(e))
                 raise
 
         try:
@@ -633,11 +680,13 @@ class StandardsCrawler(BaseCrawler):
                 grp_checked = 0
                 grp_updated = 0
                 for std in stds:
+                    standards_progress.set_current_title(std.get("title") or std.get("standard_number") or "")
                     latest_info = await self._check_standard(
                         std["standard_number"], std["source_url"], std.get("title", "")
                     )
                     grp_checked += 1
 
+                    updated = False
                     if latest_info:
                         updated = self._update_standard(std["id"], latest_info)
                         if updated:
@@ -663,6 +712,7 @@ class StandardsCrawler(BaseCrawler):
                                     reference_id=std["id"],
                                     reference_table="standards",
                                 )
+                    standards_progress.advance(updated=updated)
                 return grp_checked, grp_updated
 
             logger.info(f"[{self.name}] 正在並行處理 {len(domain_groups)} 個網站來源...")
@@ -677,8 +727,10 @@ class StandardsCrawler(BaseCrawler):
                     logger.error(f"[{self.name}] 站點群組處理時發生錯誤: {res}")
 
             self.finish_crawl_log(log_id, "success", total_checked, total_updated)
+            standards_progress.finish("success", f"完成：檢查 {total_checked}，更新 {total_updated}")
             logger.info(f"[{self.name}] 完成: 檢查 {total_checked} 個，更新 {total_updated} 個")
             return {"checked": total_checked, "updated": total_updated}
         except Exception as e:
             self.finish_crawl_log(log_id, "error", total_checked, total_updated, str(e))
+            standards_progress.finish("error", str(e))
             raise
