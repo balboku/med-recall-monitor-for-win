@@ -44,6 +44,7 @@ export const api = {
   createStandard: (data) => request('/standards', { method: 'POST', body: JSON.stringify(data) }),
   updateStandard: (id, data) => request(`/standards/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteStandard: (id) => request(`/standards/${id}`, { method: 'DELETE' }),
+  importStandards: (data) => request('/standards/import', { method: 'POST', body: JSON.stringify(data) }),
   // 以虛擬瀏覽器到 ISO 官網搜尋此法規、找到官方來源網址（編輯標準時使用）
   resolveStandardUrl: (data) => request('/standards/resolve-url', { method: 'POST', body: JSON.stringify(data) }),
   // 法規標準掃描即時進度

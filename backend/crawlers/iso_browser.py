@@ -234,8 +234,8 @@ def judge_update(user_title: str, user_version: str, lc: dict, db_docs=None) -> 
              用於 NOW 主標準的「缺補充件」交叉比對；None 視為空集合。
 
     回傳：
-        judge_status: 'valid' | 'missing_supplement' | 'obsolete' | 'integrated' | 'unknown'
-        judge_label:  中文狀態標籤（含燈號）
+        judge_status: 'valid' | 'missing_supplement' | 'missing_main' | 'obsolete' | 'integrated' | 'not_found' | 'unknown'
+        judge_label:  中文狀態標籤（依規則「狀態欄位輸出值」）
         judge_message: 給使用者的提示
         has_update:   是否需提醒（valid=False，其餘視情況 True）
         now_main:     NOW 區塊的主標準字串（供提示用）
@@ -273,14 +273,16 @@ def judge_update(user_title: str, user_version: str, lc: dict, db_docs=None) -> 
 
     _valid = {
         "judge_status": "valid",
-        "judge_label": "🟢 無更新",
-        "judge_message": "文件與附屬資料皆為最新版本，無需動作。",
+        "judge_label": "無更新",
+        "judge_message": "文件與附屬資料皆為最新且齊全，無需動作。",
         "has_update": False,
         "now_main": now_main,
     }
 
-    # 情境一：落於 NOW（主標準為最新；主標準/TS/TR/PAS 需與內部資料庫交叉比對是否缺附屬文件）
+    # 情境二：落於 NOW（雙向家族完整性檢查）
+    # 主標準為最新；需與內部資料庫交叉比對「主標準＋附屬文件」家族是否齊全。
     if un in now_norm:
+        # 缺附屬文件：資料庫【有】主標準，但【無】官網列出的 AMD/COR
         if doc_type in ("Main", "TS", "TR", "PAS") and now_amdcor_titles:
             missing = [t for t in now_amdcor_titles if _norm_doc(t) not in db_docs]
             if missing:
@@ -296,43 +298,67 @@ def judge_update(user_title: str, user_version: str, lc: dict, db_docs=None) -> 
                     "judge_status": "missing_supplement",
                     "missing_types": miss_types,
                     "missing_supplements": missing,
-                    "judge_label": f"🔵 有更新：缺少 {types_str} 版本",
+                    "judge_label": f"有更新 (缺少 {types_str})",
                     "judge_message": (
                         f"您的主標準 {now_main} 為現行版本，但系統發現缺少最新的補充文件 "
                         f"{', '.join(missing)}，請盡速更新資料庫。"),
                     "has_update": True,
                     "now_main": now_main,
                 }
-        # 無附屬文件、或資料庫已收錄全部附屬文件，或使用者本身持有的就是 NOW 附屬文件 → 無更新
+        # 缺主標準（新規則）：資料庫【有】附屬文件，但【無】主標準本體。
+        # db_docs 必為非空（至少含目前判定的這筆紀錄），故 db_docs 非空才檢查，
+        # 避免標準未收錄於資料庫時誤判為「缺少主標準」。
+        if now_main and db_docs and _norm_doc(now_main) not in db_docs:
+            return {
+                "judge_status": "missing_main",
+                "missing_types": [],
+                "missing_supplements": [],
+                "judge_label": "有更新 (缺少主標準)",
+                "judge_message": (
+                    f"系統發現資料庫已收錄補充文件，但缺少對應的最新主標準本體 "
+                    f"{now_main}。補充文件無法獨立使用，請盡速補充主標準。"),
+                "has_update": True,
+                "now_main": now_main,
+            }
+        # 無附屬文件、或家族文件皆已齊全、或使用者本身持有的就是 NOW 附屬文件 → 無更新
         return _valid
 
-    # 情境二：落於 Previously
+    # 情境三：落於 Previously（持有舊版，需升級）
     if un in prev_norm:
         if doc_type in ("AMD", "ADD"):
             return {
                 "judge_status": "integrated",
-                "judge_label": "🟡 已整合作廢",
+                "judge_label": "有更新 (舊版已整合)",
                 "judge_message": (
                     f"您持有的舊版修正案已失效，相關技術變更已整合至最新版主標準 "
-                    f"{now_main or '（最新版）'}，請直接取得新版主標準。"),
+                    f"{now_main or '（最新版）'}，請直接取得最新版主標準。"),
                 "has_update": True,
                 "now_main": now_main,
             }
         if doc_type == "COR":
             return {
                 "judge_status": "integrated",
-                "judge_label": "🟡 已整合作廢",
+                "judge_label": "有更新 (舊版已整合)",
                 "judge_message": (
                     f"您持有的舊版技術勘誤已失效，相關勘誤已於最新版主標準 "
-                    f"{now_main or '（最新版）'} 中修正，請直接取得新版主標準。"),
+                    f"{now_main or '（最新版）'} 中修正，請直接取得最新版主標準。"),
                 "has_update": True,
                 "now_main": now_main,
             }
-        # Main / TS / TR / PAS
+        # Main / TS / TR / PAS：舊版主標準已改版。
+        # 情境三A 進階檢查：若 NOW 區塊另有生效中的附屬文件(AMD/COR)，提示一併取得。
+        if now_amdcor_titles:
+            sup = ", ".join(now_amdcor_titles)
+            obsolete_msg = (
+                f"您持有的舊版主標準已改版，請更新至最新主標準 {now_main or '（最新版）'}。"
+                f"注意：新版主標準已發布補充文件 {sup}，請一併取得。")
+        else:
+            obsolete_msg = (
+                f"您持有的舊版主標準已改版，請更新至最新主標準 {now_main or '（最新版）'}。")
         return {
             "judge_status": "obsolete",
-            "judge_label": "🔴 已改版作廢",
-            "judge_message": f"您持有的舊版文件已作廢，請更新至 {now_main or '（最新版）'} 版。",
+            "judge_label": "有更新 (主標準已改版)",
+            "judge_message": obsolete_msg,
             "has_update": True,
             "now_main": now_main,
         }
@@ -345,7 +371,7 @@ def judge_update(user_title: str, user_version: str, lc: dict, db_docs=None) -> 
     if now_year and uv_year and now_year != uv_year:
         return {
             "judge_status": "obsolete",
-            "judge_label": "🔴 已改版作廢",
+            "judge_label": "有更新 (主標準已改版)",
             "judge_message": (
                 f"您持有的版本（{uv_year}）未出現在官網現行清單，且現行版為 {now_main}，"
                 f"研判已改版，請確認並更新。"),
@@ -401,6 +427,39 @@ async def _fetch_html(url: str, need_selector=None, max_wait: int = 40) -> str:
             browser.stop()
         except Exception:
             pass
+
+
+def _build_not_found_result(search_url: str, standard_name: str, current_version: str) -> dict:
+    """情境一：ISO 官網搜尋『完全沒有回傳任何結果』時的判定結果。
+
+    依「ISO 法規版本更新判定邏輯規則」，標準可能已全面撤銷且無後續替代版本，
+    狀態欄位寫入「查無結果，可能已作廢」，並提示由文管人員人工確認。
+
+    注意：source_url 回傳空字串，讓回寫端保留原有官方網址（不以搜尋頁網址覆蓋）。
+    """
+    doc_type = detect_doc_type(
+        f"{standard_name}:{current_version}" if current_version else standard_name
+    )
+    msg = (
+        "系統無法在 ISO 官網找到此標準的任何現行或歷史紀錄。"
+        "該標準可能已全面撤銷且無後續替代版本，請由文管人員人工確認後續處理方式。"
+    )
+    return {
+        "ok": True,
+        "source_url": "",
+        "found_title": "",
+        "now_status": "", "now_title": "", "now_stage": "", "now_year": "",
+        "now_list": [], "previously": [],
+        "newer_title": "", "newer_kind": "", "newer_year": "", "newer_url": "",
+        "doc_type": doc_type,
+        "judge_status": "not_found",
+        "judge_label": "查無結果，可能已作廢",
+        "judge_message": msg,
+        "now_main": "",
+        "missing_types": [], "missing_supplements": [],
+        "has_update": True,
+        "reasons": [msg],
+    }
 
 
 def _build_result(url: str, text: str, lc: dict, parsed: dict,
@@ -462,7 +521,11 @@ async def _resolve_with(browser, crawler, standard_name: str, current_version: s
     )
     results = extract_search_results(search_html)
     if not results:
-        return {"ok": False, "error": "搜尋無結果（或仍被 Cloudflare 擋下）", "query": query}
+        # 仍卡在 Cloudflare 挑戰頁 → 視為抓取失敗（不可誤判為作廢）
+        if is_challenge(search_html):
+            return {"ok": False, "error": "搜尋無結果（仍被 Cloudflare 擋下）", "query": query}
+        # 情境一：官網搜尋完全無回傳結果 → 查無結果，可能已作廢（需人工確認）
+        return _build_not_found_result(search_url, standard_name, current_version)
 
     target = pick_target(results, crawler, query)
     if not target:

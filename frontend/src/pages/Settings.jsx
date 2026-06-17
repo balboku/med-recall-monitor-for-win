@@ -95,9 +95,9 @@ export default function Settings() {
     queryFn: api.getStandards,
   });
 
-  // 法規分類清單（取自 standards.notes）
+  // 法規分類清單（取自標準資訊的「類別」欄位 standards.category）
   const standardCategories = Array.from(
-    new Set(standardsData.map((s) => s.notes).filter((n) => n && typeof n === 'string'))
+    new Set(standardsData.map((s) => s.category).filter((n) => n && typeof n === 'string'))
   ).sort();
 
   const { data: crawlLogs = [], isFetching: loading } = useQuery({

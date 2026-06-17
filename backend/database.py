@@ -222,8 +222,10 @@ def init_db():
             publication_date TEXT,
             status TEXT DEFAULT 'active',
             source_url TEXT,
+            category TEXT DEFAULT '',
             notes TEXT DEFAULT '',
             has_update INTEGER DEFAULT 0,
+            judge_label TEXT DEFAULT '',
             last_checked TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -353,6 +355,8 @@ def migrate_db():
         ("ALTER TABLE adverse_events ADD COLUMN ai_analysis TEXT",),
         ("ALTER TABLE adverse_events ADD COLUMN mdr_report_key TEXT",),
         ("ALTER TABLE adverse_events ADD COLUMN event_description_zh TEXT",),
+        ("ALTER TABLE standards ADD COLUMN category TEXT DEFAULT ''",),
+        ("ALTER TABLE standards ADD COLUMN judge_label TEXT DEFAULT ''",),
     ]
 
     migrated = 0
@@ -396,6 +400,14 @@ def migrate_db():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_severity ON alerts(severity)")
     except Exception:
         pass
+
+    # ---- 將舊版「內部備註 / 應用範圍」(notes) 的內容移轉到「類別」(category) ----
+    try:
+        cursor.execute("UPDATE standards SET category = notes, notes = '' WHERE category = '' AND notes != ''")
+        conn.commit()
+    except Exception:
+        if DATABASE_URL:
+            conn.rollback()
 
     # ---- 標準「法規名稱」格式正規化 ----
     # ISO/IEC 標準的「法規名稱」應只包含編號（例如「ISO 10993-4」），版本資訊

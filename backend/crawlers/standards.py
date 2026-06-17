@@ -406,6 +406,7 @@ class StandardsCrawler(BaseCrawler):
                     latest_version = ?,
                     status = COALESCE(?, status),
                     has_update = ?,
+                    judge_label = ?,
                     last_checked = ?,
                     updated_at = ?
                 WHERE id = ?
@@ -415,6 +416,7 @@ class StandardsCrawler(BaseCrawler):
                 latest_version_value,
                 status_str or None,
                 has_update,
+                "🟢 無更新" if has_update == 0 else ("⚠️ 修訂中" if has_update == 2 else "📢 有更新"),
                 datetime.now().isoformat(),
                 datetime.now().isoformat(),
                 standard_id,
@@ -487,17 +489,21 @@ class StandardsCrawler(BaseCrawler):
 
     def _is_iso_standard(self, std: dict) -> bool:
         """判斷標準是否屬於 ISO 類別（虛擬瀏覽器搜尋目前僅支援 ISO）。
-        以分類(notes)為主，並輔以法規名稱(title)是否以 ISO 開頭。"""
+        以「類別」欄位(category)為主，相容舊資料的分類(notes)，並輔以法規名稱(title)是否以 ISO 開頭。"""
+        category = (std.get("category") or "").strip()
         notes = (std.get("notes") or "").strip()
         title = (std.get("title") or "").strip().upper()
-        return notes == "ISO" or title.startswith("ISO")
+        return category == "ISO" or notes == "ISO" or title.startswith("ISO")
 
     def _apply_browser_result(self, std: dict, result: dict) -> bool:
         """將虛擬瀏覽器搜尋結果回寫資料庫（官方網址、最新查找版本/日期、是否有更新），
         並於判定有更新時建立提醒。回傳是否有更新。"""
         now_iso = datetime.now().isoformat()
         has_update = 1 if result.get("has_update") else 0
-        latest_version = result.get("now_year") or result.get("now_title") or ""
+        # 查無結果(情境一)時官網無現行版本資訊，保留原有 latest_version 不覆蓋為空
+        latest_version = (
+            result.get("now_year") or result.get("now_title") or std.get("latest_version") or ""
+        )
 
         conn = get_db()
         try:
@@ -507,6 +513,7 @@ class StandardsCrawler(BaseCrawler):
                     latest_version = ?,
                     last_checked = ?,
                     has_update = ?,
+                    judge_label = ?,
                     status = COALESCE(?, status),
                     updated_at = ?
                 WHERE id = ?
@@ -515,6 +522,7 @@ class StandardsCrawler(BaseCrawler):
                 latest_version,
                 now_iso,
                 has_update,
+                result.get("judge_label") or "",
                 result.get("now_status") or None,
                 now_iso,
                 std["id"],
@@ -599,7 +607,7 @@ class StandardsCrawler(BaseCrawler):
                   categories: list = None, mode: str = "routine", **kwargs):
         """執行標準版本檢查。
 
-        categories: 法規分類(notes)過濾清單；None / 空 / 含 'all' 表示全部。
+        categories: 法規分類(category 類別欄位)過濾清單；None / 空 / 含 'all' 表示全部。
         mode: 'routine' 例行執行（讀取已設定的 source_url 判讀）；
               'browser' 啟動虛擬瀏覽器到官網搜尋（目前僅支援 ISO 類別）。
         """
@@ -625,7 +633,7 @@ class StandardsCrawler(BaseCrawler):
             elif cat_filter:
                 placeholders = ",".join("?" * len(cat_filter))
                 rows = conn.execute(
-                    f"SELECT * FROM standards WHERE notes IN ({placeholders})", tuple(cat_filter)
+                    f"SELECT * FROM standards WHERE category IN ({placeholders})", tuple(cat_filter)
                 ).fetchall()
             else:
                 rows = conn.execute("SELECT * FROM standards").fetchall()

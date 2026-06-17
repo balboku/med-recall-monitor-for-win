@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { toast } from 'react-hot-toast';
@@ -18,10 +18,11 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
-  Search
+  Search,
+  Upload
 } from 'lucide-react';
 
-const emptyForm = { standard_number: '', title: '', current_version: '', source_url: '', notes: '', latest_version: '', last_checked: '' };
+const emptyForm = { standard_number: '', title: '', current_version: '', source_url: '', category: '', notes: '', latest_version: '', last_checked: '' };
 
 // 觸發掃描後，輪詢爬蟲日誌取得執行結果的設定
 const SCAN_POLL_INTERVAL_MS = 1500;
@@ -141,6 +142,7 @@ export default function Standards() {
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
+  const fileInputRef = useRef(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [filterCategory, setFilterCategory] = useState('all');
   const [scanModal, setScanModal] = useState(null);
@@ -163,15 +165,15 @@ export default function Standards() {
     },
   });
 
-  // Derive unique categories from 'notes' field (hook must be before early return)
+  // Derive unique categories from 'category' field (hook must be before early return)
   const categories = useMemo(() => {
-    const cats = new Set(standards.map(s => s.notes).filter(n => n && typeof n === 'string'));
+    const cats = new Set(standards.map(s => s.category).filter(n => n && typeof n === 'string'));
     return Array.from(cats).sort();
   }, [standards]);
 
   const filteredStandards = useMemo(() => {
     if (filterCategory === 'all') return standards;
-    return standards.filter(s => s.notes === filterCategory);
+    return standards.filter(s => s.category === filterCategory);
   }, [standards, filterCategory]);
 
   const openNew = () => { setEditing(null); setForm(emptyForm); setShowModal(true); };
@@ -182,11 +184,84 @@ export default function Standards() {
       title: s.title,
       current_version: s.current_version || '',
       source_url: s.source_url || '',
+      category: s.category || '',
       notes: s.notes || '',
       latest_version: s.latest_version || '',
       last_checked: s.last_checked || '',
     });
     setShowModal(true);
+  };
+
+  const handleImport = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Reset input so importing the same file triggers again if needed
+    e.target.value = null;
+
+    try {
+      const text = await file.text();
+      const lines = text.split('\n');
+
+      const importedData = [];
+      let inTable = false;
+      let headers = [];
+
+      for (let line of lines) {
+        line = line.trim();
+        if (!line.includes('|')) continue;
+
+        const cols = line.split('|').map(c => c.trim()).filter((c, i, arr) => i > 0 && i < arr.length - 1);
+        if (cols.length === 0) continue;
+
+        if (!inTable && cols.some(c => c.includes('---'))) {
+          continue;
+        }
+
+        if (cols.includes('公司文件編號') || cols.includes('法規名稱')) {
+          inTable = true;
+          headers = cols;
+          continue;
+        }
+
+        if (inTable && !cols.some(c => c.includes('---'))) {
+          const standard_number = cols[headers.indexOf('公司文件編號')] || '';
+          const title = cols[headers.indexOf('法規名稱')] || '';
+
+          let versionIndex = headers.indexOf('目前使用版本');
+          if (versionIndex === -1) versionIndex = headers.indexOf('版本');
+          const current_version = versionIndex !== -1 ? (cols[versionIndex] || '') : '';
+
+          const category = headers.includes('類別') ? (cols[headers.indexOf('類別')] || '') : '';
+
+          if (standard_number && title) {
+            importedData.push({
+              standard_number,
+              title,
+              current_version,
+              category,
+              source_url: '',
+              notes: ''
+            });
+          }
+        }
+      }
+
+      if (importedData.length === 0) {
+        toast.error('未在檔案中找到有效的法規標準表格');
+        return;
+      }
+
+      const tId = toast.loading(`正在匯入 ${importedData.length} 筆資料...`);
+      const res = await api.importStandards(importedData);
+
+      toast.success(res.message || '匯入完成', { id: tId });
+      queryClient.invalidateQueries({ queryKey: ['standards'] });
+
+    } catch (err) {
+      console.error(err);
+      toast.error('匯入發生錯誤：' + err.message, { id: tId });
+    }
   };
 
   const handleSave = async () => {
@@ -341,6 +416,16 @@ export default function Standards() {
               <option key={c} value={c}>{c}</option>
             ))}
           </select>
+          <input
+            type="file"
+            accept=".md"
+            style={{ display: 'none' }}
+            ref={fileInputRef}
+            onChange={handleImport}
+          />
+          <button className="btn btn-secondary" onClick={() => fileInputRef.current?.click()} title="匯入法規清單 MD 檔案">
+            <Upload size={18} /> 從 MD 檔匯入
+          </button>
           <button className="btn btn-primary" onClick={openNew}>
             <Plus size={18} /> 新增追蹤標準
           </button>
@@ -368,6 +453,7 @@ export default function Standards() {
               <thead>
                 <tr>
                   <th>文件編號 / 法規名稱</th>
+                  <th style={{ width: '160px' }}>狀態</th>
                   <th style={{ width: '160px' }}>當前版本</th>
                   <th style={{ width: '160px' }}>最新同步版本</th>
                   <th style={{ width: '180px' }}>上次檢查時間</th>
@@ -392,17 +478,59 @@ export default function Standards() {
                             {s.title}
                           </span>
                         </div>
-                        {s.has_update && (
+                        {s.has_update && !s.judge_label && (
                           <span className="tag tag-amber" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <RotateCcw size={12} /> 有新版本
                           </span>
                         )}
                       </div>
-                      {s.notes && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '6px' }}>
-                          <AlertCircle size={12} /> {s.notes}
+                      {(s.category || s.notes) && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '6px' }}>
+                          {s.category && (
+                            <div style={{ display: 'flex', alignItems: 'center' }}>
+                              <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'var(--bg-glass)', border: '1px solid var(--glass-border)', color: 'var(--text-secondary)' }}>
+                                {s.category}
+                              </span>
+                            </div>
+                          )}
+                          {s.notes && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
+                              <AlertCircle size={12} /> {s.notes}
+                            </div>
+                          )}
                         </div>
                       )}
+                    </td>
+                    {/* 狀態欄位 */}
+                    <td style={{ verticalAlign: 'middle' }}>
+                      {(() => {
+                        const label = s.judge_label || (s.last_checked
+                          ? (s.has_update === 0 ? '\uD83D\uDFE2 已是最新版' : s.has_update === 2 ? '\u26A0\uFE0F 修訂中' : '\uD83D\uDCE2 有更新')
+                          : null);
+                        if (!label) return <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic', fontSize: '0.85rem' }}>尚未掃描</span>;
+                        const isGood = label.includes('無更新') || label.includes('最新版');
+                        const isWarn = label.includes('修訂中') || label.includes('缺少');
+                        const isDanger = label.includes('作廢') || label.includes('已改版');
+                        const color = isGood ? 'var(--accent-success)' : isDanger ? 'var(--accent-danger)' : 'var(--accent-warning)';
+                        const bg = isGood ? 'rgba(34,197,94,0.1)' : isDanger ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)';
+                        return (
+                          <span style={{
+                            fontSize: '0.8rem',
+                            padding: '3px 8px',
+                            borderRadius: '6px',
+                            background: bg,
+                            color,
+                            border: `1px solid ${color}`,
+                            fontWeight: 600,
+                            whiteSpace: 'pre-wrap',
+                            lineHeight: '1.4',
+                            display: 'inline-block',
+                            maxWidth: '140px',
+                          }}>
+                            {label}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td style={{ verticalAlign: 'middle' }}>
                       {s.current_version ? (
@@ -455,40 +583,49 @@ export default function Standards() {
             onPageChange={(p) => setCurrentPage(p)}
           />
         </div>
-      )}
+      )
+      }
 
       {/* Modal */}
-      {showModal && (
-        <div className="modal-overlay">
-          <div className="modal" style={{ maxWidth: '600px' }}>
-            <div className="modal-header">
-              <h2 style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                {editing ? <Edit2 size={20} /> : <Plus size={20} />}
-                {editing ? '編輯標準資訊' : '新增追蹤標準'}
-              </h2>
-              <button className="btn btn-ghost btn-sm" onClick={() => setShowModal(false)}>
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <div className="form-group">
-                <label className="form-label">公司文件編號 <span style={{ color: 'var(--accent-danger)' }}>*</span></label>
-                <input className="form-input" value={form.standard_number}
-                  onChange={(e) => setForm({ ...form, standard_number: e.target.value })}
-                  placeholder="例：R101-0001-01" autoFocus />
+      {
+        showModal && (
+          <div className="modal-overlay">
+            <div className="modal" style={{ maxWidth: '600px' }}>
+              <div className="modal-header">
+                <h2 style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  {editing ? <Edit2 size={20} /> : <Plus size={20} />}
+                  {editing ? '編輯標準資訊' : '新增追蹤標準'}
+                </h2>
+                <button className="btn btn-ghost btn-sm" onClick={() => setShowModal(false)}>
+                  <X size={20} />
+                </button>
               </div>
-              <div className="form-group">
-                <label className="form-label">法規名稱 <span style={{ color: 'var(--accent-danger)' }}>*</span></label>
-                <input className="form-input" value={form.title}
-                  onChange={(e) => setForm({ ...form, title: e.target.value })}
-                  placeholder="例：Medical electrical equipment - General requirements" />
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+              <div className="modal-body">
                 <div className="form-group">
-                  <label className="form-label">目前使用版本</label>
-                  <input className="form-input" value={form.current_version}
-                    onChange={(e) => setForm({ ...form, current_version: e.target.value })}
-                    placeholder="例：Edition 3.2" />
+                  <label className="form-label">公司文件編號 <span style={{ color: 'var(--accent-danger)' }}>*</span></label>
+                  <input className="form-input" value={form.standard_number}
+                    onChange={(e) => setForm({ ...form, standard_number: e.target.value })}
+                    placeholder="例：R101-0001-01" autoFocus />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">法規名稱 <span style={{ color: 'var(--accent-danger)' }}>*</span></label>
+                  <input className="form-input" value={form.title}
+                    onChange={(e) => setForm({ ...form, title: e.target.value })}
+                    placeholder="例：Medical electrical equipment - General requirements" />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                  <div className="form-group">
+                    <label className="form-label">類別</label>
+                    <input className="form-input" value={form.category}
+                      onChange={(e) => setForm({ ...form, category: e.target.value })}
+                      placeholder="例：ISO 或 IEC" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">目前使用版本</label>
+                    <input className="form-input" value={form.current_version}
+                      onChange={(e) => setForm({ ...form, current_version: e.target.value })}
+                      placeholder="例：Edition 3.2" />
+                  </div>
                 </div>
                 <div className="form-group">
                   <label className="form-label">官方來源網址</label>
@@ -496,7 +633,7 @@ export default function Standards() {
                     <input className="form-input" value={form.source_url}
                       onChange={(e) => setForm({ ...form, source_url: e.target.value })}
                       placeholder="IEC/ISO 官網頁面" style={{ flex: 1, minWidth: 0 }} />
-                    {(form.notes || '').trim() === 'ISO' && (
+                    {(form.category || '').trim() === 'ISO' && (
                       <button
                         type="button"
                         className="btn btn-secondary"
@@ -510,145 +647,147 @@ export default function Standards() {
                       </button>
                     )}
                   </div>
-                  {(form.notes || '').trim() === 'ISO' && (
+                  {(form.category || '').trim() === 'ISO' && (
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '4px', display: 'block' }}>
                       依「法規名稱」到 ISO 官網查找官方頁面（僅針對此筆，需本機 Chrome）
                     </span>
                   )}
                 </div>
-              </div>
-              {editing && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                  <div className="form-group">
-                    <label className="form-label">最新查找版本</label>
-                    <input className="form-input" value={form.latest_version || ''} readOnly
-                      placeholder="尚未查找"
-                      style={{ background: 'var(--bg-surface)', color: 'var(--text-secondary)', cursor: 'default' }} />
+                {editing && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                    <div className="form-group">
+                      <label className="form-label">最新查找版本</label>
+                      <input className="form-input" value={form.latest_version || ''} readOnly
+                        placeholder="尚未查找"
+                        style={{ background: 'var(--bg-surface)', color: 'var(--text-secondary)', cursor: 'default' }} />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">最新查找日期</label>
+                      <input className="form-input"
+                        value={form.last_checked ? new Date(form.last_checked).toLocaleString('zh-TW') : ''}
+                        readOnly placeholder="尚未查找"
+                        style={{ background: 'var(--bg-surface)', color: 'var(--text-secondary)', cursor: 'default' }} />
+                    </div>
                   </div>
-                  <div className="form-group">
-                    <label className="form-label">最新查找日期</label>
-                    <input className="form-input"
-                      value={form.last_checked ? new Date(form.last_checked).toLocaleString('zh-TW') : ''}
-                      readOnly placeholder="尚未查找"
-                      style={{ background: 'var(--bg-surface)', color: 'var(--text-secondary)', cursor: 'default' }} />
-                  </div>
+                )}
+                <div className="form-group">
+                  <label className="form-label">內部備註 / 應用範圍</label>
+                  <textarea className="form-textarea" value={form.notes}
+                    onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                    placeholder="紀錄此標準與產品開發的關聯性..." style={{ minHeight: '100px' }} />
                 </div>
-              )}
-              <div className="form-group">
-                <label className="form-label">內部備註 / 應用範圍</label>
-                <textarea className="form-textarea" value={form.notes}
-                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                  placeholder="紀錄此標準與產品開發的關聯性..." style={{ minHeight: '100px' }} />
+              </div>
+              <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  {editing && (
+                    <button className="btn btn-ghost" onClick={() => handleDelete(editing.id)} style={{ color: 'var(--accent-danger)' }} title="刪除">
+                      <Trash2 size={18} style={{ marginRight: '6px' }} />
+                      刪除標準
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button className="btn btn-secondary" onClick={() => setShowModal(false)}>取消</button>
+                  <button className="btn btn-primary" onClick={handleSave}
+                    disabled={!form.standard_number.trim() || !form.title.trim() || mutation.isPending}>
+                    {mutation.isPending ? '提交中...' : (editing ? '儲存變更' : '加入追蹤清單')}
+                  </button>
+                </div>
               </div>
             </div>
-            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                {editing && (
-                  <button className="btn btn-ghost" onClick={() => handleDelete(editing.id)} style={{ color: 'var(--accent-danger)' }} title="刪除">
-                    <Trash2 size={18} style={{ marginRight: '6px' }} />
-                    刪除標準
+          </div>
+        )
+      }
+
+      {/* 單一標準掃描結果視窗 */}
+      {
+        scanModal && (
+          <div className="modal-overlay">
+            <div className="modal" style={{ maxWidth: '480px' }}>
+              <div className="modal-header">
+                <h2 style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <RefreshCw size={20} />
+                  掃描執行結果
+                </h2>
+                {scanModal.status !== 'loading' && (
+                  <button className="btn btn-ghost btn-sm" onClick={() => setScanModal(null)}>
+                    <X size={20} />
                   </button>
                 )}
               </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button className="btn btn-secondary" onClick={() => setShowModal(false)}>取消</button>
-                <button className="btn btn-primary" onClick={handleSave}
-                  disabled={!form.standard_number.trim() || !form.title.trim() || mutation.isPending}>
-                  {mutation.isPending ? '提交中...' : (editing ? '儲存變更' : '加入追蹤清單')}
+              <div className="modal-body">
+                <p style={{ marginBottom: '16px', color: 'var(--text-secondary)' }}>
+                  法規名稱：<strong style={{ color: 'var(--text-primary)' }}>
+                    {scanModal.standard.title}
+                  </strong>
+                </p>
+
+                {scanModal.status === 'loading' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 0' }}>
+                    <div className="spinner"></div>
+                    <span>正在執行掃描，請稍候...</span>
+                  </div>
+                )}
+
+                {scanModal.status === 'error' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-danger)' }}>
+                    <AlertCircle size={18} />
+                    <span>啟動掃描失敗：{scanModal.error}</span>
+                  </div>
+                )}
+
+                {scanModal.status === 'timeout' && (
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', color: 'var(--accent-warning)' }}>
+                    <AlertCircle size={18} style={{ marginTop: '2px', flexShrink: 0 }} />
+                    <span>掃描已在背景送出，但尚未在預期時間內完成，可能仍在執行中。請稍後重新整理頁面，查看「上次檢查時間」是否已更新。</span>
+                  </div>
+                )}
+
+                {(scanModal.status === 'done' || scanModal.status === 'failed') && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: '8px',
+                      color: scanModal.status === 'done' ? 'var(--accent-success)' : 'var(--accent-danger)'
+                    }}>
+                      {scanModal.status === 'done' ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
+                      <strong>{scanModal.status === 'done' ? '掃描完成' : '掃描執行失敗'}</strong>
+                    </div>
+
+                    <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span>目前使用版本：{scanModal.standard.current_version || '未註記'}</span>
+                      <span>抓取最新版本：{scanModal.standard.latest_version || '未取得'}</span>
+                      {scanModal.result?.completed_at && (
+                        <span>完成時間：{new Date(scanModal.result.completed_at).toLocaleString('zh-TW')}</span>
+                      )}
+                    </div>
+
+                    {scanModal.result?.error_message && (
+                      <div style={{ fontSize: '0.9rem', color: 'var(--accent-danger)' }}>
+                        錯誤訊息：{scanModal.result.error_message}
+                      </div>
+                    )}
+
+                    {scanModal.status === 'done' && scanModal.standard.has_update > 0 && (
+                      <div style={{ fontSize: '0.9rem', color: 'var(--accent-warning)' }}>
+                        ⚠️ 偵測到新版本，請查看清單中的「最新同步版本」欄位。
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => setScanModal(null)}
+                  disabled={scanModal.status === 'loading'}
+                >
+                  確認
                 </button>
               </div>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* 單一標準掃描結果視窗 */}
-      {scanModal && (
-        <div className="modal-overlay">
-          <div className="modal" style={{ maxWidth: '480px' }}>
-            <div className="modal-header">
-              <h2 style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <RefreshCw size={20} />
-                掃描執行結果
-              </h2>
-              {scanModal.status !== 'loading' && (
-                <button className="btn btn-ghost btn-sm" onClick={() => setScanModal(null)}>
-                  <X size={20} />
-                </button>
-              )}
-            </div>
-            <div className="modal-body">
-              <p style={{ marginBottom: '16px', color: 'var(--text-secondary)' }}>
-                法規名稱：<strong style={{ color: 'var(--text-primary)' }}>
-                  {scanModal.standard.title}
-                </strong>
-              </p>
-
-              {scanModal.status === 'loading' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 0' }}>
-                  <div className="spinner"></div>
-                  <span>正在執行掃描，請稍候...</span>
-                </div>
-              )}
-
-              {scanModal.status === 'error' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-danger)' }}>
-                  <AlertCircle size={18} />
-                  <span>啟動掃描失敗：{scanModal.error}</span>
-                </div>
-              )}
-
-              {scanModal.status === 'timeout' && (
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', color: 'var(--accent-warning)' }}>
-                  <AlertCircle size={18} style={{ marginTop: '2px', flexShrink: 0 }} />
-                  <span>掃描已在背景送出，但尚未在預期時間內完成，可能仍在執行中。請稍後重新整理頁面，查看「上次檢查時間」是否已更新。</span>
-                </div>
-              )}
-
-              {(scanModal.status === 'done' || scanModal.status === 'failed') && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <div style={{
-                    display: 'flex', alignItems: 'center', gap: '8px',
-                    color: scanModal.status === 'done' ? 'var(--accent-success)' : 'var(--accent-danger)'
-                  }}>
-                    {scanModal.status === 'done' ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
-                    <strong>{scanModal.status === 'done' ? '掃描完成' : '掃描執行失敗'}</strong>
-                  </div>
-
-                  <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <span>目前使用版本：{scanModal.standard.current_version || '未註記'}</span>
-                    <span>抓取最新版本：{scanModal.standard.latest_version || '未取得'}</span>
-                    {scanModal.result?.completed_at && (
-                      <span>完成時間：{new Date(scanModal.result.completed_at).toLocaleString('zh-TW')}</span>
-                    )}
-                  </div>
-
-                  {scanModal.result?.error_message && (
-                    <div style={{ fontSize: '0.9rem', color: 'var(--accent-danger)' }}>
-                      錯誤訊息：{scanModal.result.error_message}
-                    </div>
-                  )}
-
-                  {scanModal.status === 'done' && scanModal.standard.has_update > 0 && (
-                    <div style={{ fontSize: '0.9rem', color: 'var(--accent-warning)' }}>
-                      ⚠️ 偵測到新版本，請查看清單中的「最新同步版本」欄位。
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                className="btn btn-primary"
-                onClick={() => setScanModal(null)}
-                disabled={scanModal.status === 'loading'}
-              >
-                確認
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+        )
+      }
     </>
   );
 }
