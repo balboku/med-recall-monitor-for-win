@@ -4,41 +4,126 @@
 
 This project can now run directly on your machine without Docker.
 
-### Windows
+---
 
-啟動系統 (背景無痕執行)：
+## 安裝環境與套件
 
+### 需要手動下載安裝的項目
+
+以下兩項需先自行至官網下載安裝，其餘步驟皆由腳本自動完成：
+
+| 項目 | 最低版本 | 官網 |
+| --- | --- | --- |
+| **Python** | 3.10+ | https://www.python.org/downloads/ |
+| **Node.js** | 20+ | https://nodejs.org/ |
+
+安裝語系選擇：**繁體中文（Traditional Chinese）** 或 **English**。
+
+> Python 安裝時請勾選 **「Add Python to PATH」**。
+
+---
+
+### 一個指令完成所有安裝與啟動
+
+確認 Python 與 Node.js 安裝完成後，依照您的作業系統執行以下指令即可，腳本會自動建立虛擬環境、安裝所有套件並啟動系統。
+
+**Windows 11（PowerShell / CMD）：**
 ```bat
 .\restart_system.bat
 ```
 
-關閉系統與釋放資源：
-
-```bat
-.\stop_local_services.bat
+**Mac：**
+```bash
+chmod +x restart_system.command && ./restart_system.command
 ```
 
-### Mac / Linux
+腳本會依序自動執行：
+1. 建立 Python 虛擬環境（`backend/.venv`）
+2. 安裝 Backend 套件（`backend/requirements-local.txt`）
+3. 安裝 Frontend 套件（`npm install`）
+4. 於背景啟動 Backend（Port 8000）與 Frontend（Port 5173）
 
-Run:
+> **AI 報告功能（選用）：** 若需要 AI 深度分析報告，請在啟動前先複製 `backend/.env.example` 為 `backend/.env`，並填入 Gemini API 金鑰（`GEMINI_API_KEY_1`）。
 
+---
+
+## 測試階段：終端啟動指令
+
+測試時建議**分開兩個終端視窗**分別啟動後端與前端，方便即時查看各自的 log。
+
+### 方式一：一鍵啟動（背景執行）
+
+**Windows：**
+```bat
+.\restart_system.bat
+```
+
+**Mac / Linux：**
 ```bash
 chmod +x restart_system.command
 ./restart_system.command
 ```
 
-### What the local script does
+> 此方式會在背景無痕執行，關閉啟動視窗並**不會**停止服務，須另行執行關閉指令。
 
-If you need AI report generation, create `backend/.env` from `backend/.env.example` and fill in your Gemini keys.
+---
 
-- Creates `backend/.venv` if needed
-- Installs backend dependencies from `backend/requirements-local.txt`
-- Installs frontend dependencies when `frontend/node_modules` is missing
-- Starts FastAPI on `http://localhost:8000`
-- Starts Vite on `http://localhost:5173`
-- Uses `TASK_QUEUE_MODE=local`, so report generation and crawlers do not require Docker, Redis, or a Celery worker
+### 方式二：分開終端啟動（推薦用於測試/開發）
 
-### Optional Docker mode
+**終端 1 — 啟動 Backend（FastAPI）：**
+
+Windows：
+```bat
+.\start_backend_local.bat
+```
+
+Mac / Linux：
+```bash
+cd backend
+TASK_QUEUE_MODE=local PYTHONPATH=$(pwd) .venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+**終端 2 — 啟動 Frontend（Vite）：**
+
+Windows：
+```bat
+.\start_frontend_local.bat
+```
+
+Mac / Linux：
+```bash
+cd frontend
+VITE_API_PROXY_TARGET=http://127.0.0.1:8000 npm run dev -- --host 0.0.0.0
+```
+
+啟動後可使用：
+
+| 服務 | 網址 |
+| --- | --- |
+| Frontend | http://localhost:5173 |
+| Backend API | http://localhost:8000 |
+| Swagger UI | http://localhost:8000/docs |
+
+---
+
+## 關閉系統與釋放資源
+
+### 方式一：執行關閉腳本（對應一鍵啟動）
+
+**Windows：**
+```bat
+.\stop_local_services.bat
+```
+
+> 此腳本會強制終止所有屬於本專案的 `python.exe`、`node.exe` 程序，確保資源完全釋放。
+
+### 方式二：分開終端直接關閉（對應方式二）
+
+在後端與前端各自的終端視窗按下 **`Ctrl + C`** 即可正常終止。
+
+---
+
+## Optional Docker mode
 
 If you still want the old Docker workflow, use:
 
@@ -242,23 +327,7 @@ ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 
 ### 本機啟動
 
-#### Mac / Linux
-```bash
-chmod +x restart_system.command
-./restart_system.command
-```
-
-#### Windows
-直接雙擊執行 `restart_system.bat`，系統會於背景隱藏執行。
-或者在 PowerShell / CMD 執行：
-```bash
-.\restart_system.bat
-```
-
-> **注意：** 由於伺服器是在背景「無痕」執行，若要完全關閉系統釋放資源，請勿只關閉啟動視窗，務必要執行以下指令或直接雙擊該腳本：
-> ```bash
-> .\stop_local_services.bat
-> ```
+詳細的安裝、啟動與關閉指令請參閱文件頂部的 **安裝環境與套件** 及 **測試階段：終端啟動指令** 章節。
 
 啟動後可使用：
 
