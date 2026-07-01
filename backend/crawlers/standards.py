@@ -592,10 +592,27 @@ class StandardsCrawler(BaseCrawler):
             if result.get("ok"):
                 updated = self._apply_browser_result(std, result)
             else:
+                # ok=False：技術性錯誤（如 Cloudflare 擋下）。
+                # 回寫「查找失敗」標籤至資料庫並更新 last_checked，
+                # 避免出現「查找失敗: ...」訊息卻未寫回的情況。
+                err_msg = result.get("error", "無回傳")
                 logger.warning(
-                    f"[{self.name}] {std.get('standard_number')} 搜尋無相符結果: "
-                    f"{result.get('error', '無回傳')}"
+                    f"[{self.name}] {std.get('standard_number')} 搜尋發生技術錯誤: "
+                    f"{err_msg}"
                 )
+                _now = datetime.now().isoformat()
+                _conn = get_db()
+                try:
+                    _conn.execute("""
+                        UPDATE standards SET
+                            last_checked = ?,
+                            judge_label = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                    """, (_now, "查找失敗", _now, std["id"]))
+                    _conn.commit()
+                finally:
+                    _conn.close()
             if updated:
                 counters["updated"] += 1
             standards_progress.advance(updated=updated)

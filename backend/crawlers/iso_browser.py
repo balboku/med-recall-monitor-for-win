@@ -529,12 +529,13 @@ async def _resolve_with(browser, crawler, standard_name: str, current_version: s
 
     target = pick_target(results, crawler, query)
     if not target:
-        return {
-            "ok": False,
-            "error": f"搜尋結果中找不到與「{query}」編號精確相符的標準頁",
-            "query": query,
-            "candidates": [t for _, t in results[:8]],
-        }
+        # 搜尋有回傳但找不到精確匹配的標準頁（例如已撤銷標準的搜尋結果只有其他標準）。
+        # 依「ISO 法規版本更新判定邏輯規則」情境一：視同「查無此標準」，可能已作廢。
+        logger.info(
+            f"[iso_browser] 搜尋 {query!r} 有結果但無精確匹配"
+            f"（候選項目: {[t for _, t in results[:4]]}），視為查無此標準（可能已作廢）。"
+        )
+        return _build_not_found_result(search_url, standard_name, current_version)
     url, text = target
     _, std_html = await _open_and_wait(browser, url)
     lc = parse_lifecycle(std_html)

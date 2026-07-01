@@ -21,3 +21,6 @@ __pycache__/
 # Generated data
 translated_events*
 data/translated_events*
+
+# 需求資料夾
+需求/
