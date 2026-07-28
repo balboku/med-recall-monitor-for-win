@@ -893,7 +893,7 @@ export default function Settings() {
                 <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.95rem' }}>2. 選擇執行方式</div>
                 {[
                   { v: 'routine', icon: <Play size={16} />, t: '例行執行', d: '讀取各標準已設定的官方來源網址，直接判讀版本更新。' },
-                  { v: 'browser', icon: <Search size={16} />, t: '啟動虛擬瀏覽器搜尋', d: '到 ISO 官網依法規名稱搜尋官方頁面並回填網址（目前僅支援 ISO 類別，其餘略過）。' },
+                  { v: 'browser', icon: <Search size={16} />, t: '啟動官網搜尋', d: '依法規名稱到官方來源查找並判定版本（目前支援 ISO、IEC、EN、EU、MDCG、台灣法規、FDA、ASTM 類別，其餘略過）。' },
                 ].map((opt) => (
                   <label key={opt.v} style={{
                     display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer',
@@ -913,7 +913,9 @@ export default function Settings() {
                 ))}
                 {stdExecMode === 'browser' && (
                   <div style={{ fontSize: '0.78rem', color: 'var(--accent-warning)' }}>
-                    ⚠️ 虛擬瀏覽器搜尋會逐筆開啟瀏覽器、較耗時，且目前僅處理 ISO 類別（需本機 Chrome）。
+                    ⚠️ 目前僅處理 ISO、IEC、EN、EU、MDCG、台灣法規、FDA、ASTM 類別。台灣法規需對政府網站放慢請求，較耗時。IEC 走官方搜尋 API、EN 比對歐盟協調
+                    標準公報清單、EU 查 EUR-Lex 合併版，三者數秒即可完成；ISO 官網受防護需啟動
+                    虛擬瀏覽器逐筆查找，較耗時（需本機 Chrome）。
                   </div>
                 )}
               </div>

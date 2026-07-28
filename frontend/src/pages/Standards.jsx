@@ -25,7 +25,8 @@ import {
   HelpCircle,
   AlertTriangle,
   CheckSquare,
-  Layers
+  Layers,
+  SearchX
 } from 'lucide-react';
 
 const emptyForm = { standard_number: '', title: '', current_version: '', source_url: '', category: '', notes: '', latest_version: '', last_checked: '' };
@@ -37,19 +38,61 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** 判斷單一法規標準的狀態分類 */
+// 後端 judge_categories 值 → 前端分類桶位／顯示樣式的對應表
+const CATEGORY_META = {
+  no_update:  { bucket: 'ok',       color: 'var(--accent-success)', bg: 'rgba(34,197,94,0.1)' },
+  has_update: { bucket: 'update',   color: 'var(--accent-warning)', bg: 'rgba(245,158,11,0.1)' },
+  missing:    { bucket: 'missing',  color: 'var(--accent-danger)',  bg: 'rgba(239,68,68,0.1)' },
+  not_found:  { bucket: 'notFound', color: 'var(--accent-danger)',  bg: 'rgba(239,68,68,0.1)' },
+  unknown:    { bucket: 'unknown',  color: 'var(--text-tertiary)',  bg: 'rgba(255,255,255,0.06)' },
+};
+
+/** 判斷單一法規標準命中的狀態分類（一筆可能同時命中多個，例如「有更新」+「缺少」） */
 function classifyStandard(s) {
-  if (!s.last_checked) return 'unknown';       // 無法判定
-  if (s.judge_label && s.judge_label.includes('缺少')) return 'missing';
-  if (s.has_update === 0) return 'ok';          // 已是最新版
-  if (s.has_update === 2) return 'update';      // 修訂中 → 待更新
-  if (s.has_update === 1) return 'update';      // 有更新 → 待更新
+  if (!s.last_checked) return ['unknown'];
+  if (s.judge_categories) {
+    const cats = String(s.judge_categories).split(',').map(c => c.trim()).filter(Boolean);
+    if (cats.length) return cats.map(c => CATEGORY_META[c]?.bucket || 'unknown');
+  }
+  // 相容舊資料／尚未提供 judge_categories 的來源（FDA、MDCG、TFDA、ASTM、EU 等）：沿用字串猜測
+  if (s.judge_label && s.judge_label.includes('缺少')) return ['missing'];
+  if (s.judge_label && (s.judge_label.includes('查無結果') || s.judge_label.includes('作廢'))) return ['notFound'];
+  if (s.judge_label && s.judge_label.includes('無法判定')) return ['unknown'];
+  if (s.has_update === 0) return ['ok'];          // 已是最新版
+  if (s.has_update === 2) return ['update'];      // 修訂中 → 待更新
+  if (s.has_update === 1) return ['update'];      // 有更新 → 待更新
   if (s.judge_label) {
     const l = s.judge_label;
-    if (l.includes('最新') && !l.includes('更新')) return 'ok';
-    return 'update';
+    if (l.includes('最新') && !l.includes('更新')) return ['ok'];
+    return ['update'];
   }
-  return 'unknown';
+  return ['unknown'];
+}
+
+/** 依 judge_categories／judge_label 組出狀態欄位要顯示的徽章（一筆可能同時顯示多個，例如「有更新」+「缺少」） */
+function getStatusBadges(s) {
+  const label = s.judge_label || (s.last_checked
+    ? (s.has_update === 0 ? '🟢 已是最新版' : s.has_update === 2 ? '⚠️ 修訂中' : '📢 有更新')
+    : null);
+  if (!label) return null;
+
+  if (s.judge_categories) {
+    const cats = String(s.judge_categories).split(',').map(c => c.trim()).filter(Boolean);
+    const parts = label.split('、');
+    if (cats.length && cats.length === parts.length) {
+      return cats.map((c, i) => ({
+        text: parts[i],
+        color: CATEGORY_META[c]?.color || 'var(--accent-warning)',
+        bg: CATEGORY_META[c]?.bg || 'rgba(245,158,11,0.1)',
+      }));
+    }
+  }
+  // 相容舊資料／尚未提供 judge_categories 的來源：整段文字以字串猜測上色
+  const isGood = label.includes('無更新') || label.includes('最新版');
+  const isDanger = label.includes('作廢') || label.includes('已改版') || label.includes('查無結果');
+  const color = isGood ? 'var(--accent-success)' : isDanger ? 'var(--accent-danger)' : 'var(--accent-warning)';
+  const bg = isGood ? 'rgba(34,197,94,0.1)' : isDanger ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)';
+  return [{ text: label, color, bg }];
 }
 
 // ─── Pagination ─────────────────────────────────────────────────────────────
@@ -140,24 +183,29 @@ function Pagination({ currentPage, totalPages, onPageChange }) {
 function OverviewTab({ standards }) {
   const stats = useMemo(() => {
     const total = standards.length;
-    let ok = 0, update = 0, missing = 0, unknown = 0;
+    // 一筆標準可能同時命中多個分類（例如「有更新」+「缺少」），故每個命中的桶位都各自累加，
+    // 卡片加總可能大於總數。
+    let ok = 0, update = 0, missing = 0, notFound = 0, unknown = 0;
     const byCategory = {};
 
     standards.forEach((s) => {
-      const cls = classifyStandard(s);
-      if (cls === 'ok') ok++;
-      else if (cls === 'update') update++;
-      else if (cls === 'missing') missing++;
-      else unknown++;
-
+      const classes = classifyStandard(s);
       const cat = s.category || '（未分類）';
-      if (!byCategory[cat]) byCategory[cat] = { total: 0, ok: 0, update: 0, missing: 0, unknown: 0 };
+      if (!byCategory[cat]) byCategory[cat] = { total: 0, ok: 0, update: 0, missing: 0, notFound: 0, unknown: 0 };
       byCategory[cat].total++;
-      byCategory[cat][cls]++;
+
+      classes.forEach((cls) => {
+        if (cls === 'ok') ok++;
+        else if (cls === 'update') update++;
+        else if (cls === 'missing') missing++;
+        else if (cls === 'notFound') notFound++;
+        else unknown++;
+        byCategory[cat][cls] = (byCategory[cat][cls] || 0) + 1;
+      });
     });
 
     const categories = Object.entries(byCategory).sort(([a], [b]) => a.localeCompare(b, 'zh-TW'));
-    return { total, ok, update, missing, unknown, categories };
+    return { total, ok, update, missing, notFound, unknown, categories };
   }, [standards]);
 
   const cardStyle = (color, bg) => ({
@@ -208,6 +256,14 @@ function OverviewTab({ standards }) {
             </div>
             <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--accent-danger)' }}>{stats.missing}</div>
           </div>
+          {/* 查無結果 */}
+          <div style={cardStyle('var(--accent-danger)', 'rgba(239,68,68,0.08)')}>
+            <div style={{ fontSize: '0.8rem', color: 'var(--accent-danger)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <SearchX size={14} /> 查無結果
+            </div>
+            <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--accent-danger)' }}>{stats.notFound}</div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', marginTop: '-4px' }}>（可能已作廢）</div>
+          </div>
           {/* 無法判定 */}
           <div style={cardStyle('var(--text-tertiary)', 'rgba(255,255,255,0.04)')}>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -234,6 +290,7 @@ function OverviewTab({ standards }) {
                   <th style={{ width: '100px', textAlign: 'center' }}>已是最新版</th>
                   <th style={{ width: '80px', textAlign: 'center' }}>待更新</th>
                   <th style={{ width: '100px', textAlign: 'center' }}>缺少法規</th>
+                  <th style={{ width: '90px', textAlign: 'center' }}>查無結果</th>
                   <th style={{ width: '80px', textAlign: 'center' }}>無法判定</th>
                 </tr>
               </thead>
@@ -262,6 +319,11 @@ function OverviewTab({ standards }) {
                     <td style={{ textAlign: 'center' }}>
                       {c.missing > 0
                         ? <span style={{ color: 'var(--accent-danger)', fontWeight: 700 }}>{c.missing}</span>
+                        : <span style={{ color: 'var(--text-tertiary)' }}>—</span>}
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+                      {c.notFound > 0
+                        ? <span style={{ color: 'var(--accent-danger)', fontWeight: 700 }}>{c.notFound}</span>
                         : <span style={{ color: 'var(--text-tertiary)' }}>—</span>}
                     </td>
                     <td style={{ textAlign: 'center' }}>
@@ -315,6 +377,27 @@ export default function Standards() {
     const cats = new Set(standards.map(s => s.category).filter(n => n && typeof n === 'string'));
     return Array.from(cats).sort();
   }, [standards]);
+
+  // 可自動查找的來源：ISO（虛擬瀏覽器）、IEC（webstore 搜尋 API）、EN（歐盟協調標準公報清單）。
+  // 以「類別」為主，未填類別時退而由「法規名稱」前綴推斷，與後端 _resolve_source_kind 一致。
+  // EN 須優先判斷：'EN ISO 13485' 同時含 EN 與 ISO，但應走協調標準清單。
+  const resolveSource = useMemo(() => {
+    const cat = (form.category || '').trim().toUpperCase();
+    if (cat.startsWith('TAIWAN TFDA')) return 'TW';
+    if (cat.startsWith('FDA')) return 'FDA';
+    if (cat.includes('ASTM') || cat.includes('AAMI')) return 'ASTM';
+    if (cat === 'MDCG GUIDANCE') return 'MDCG';
+    if (cat === 'EU REGULATION') return 'EU';
+    if (cat === 'EN ISO / EN' || cat === 'BS EN' || cat === 'EN') return 'EN';
+    if (cat === 'ISO' || cat === 'IEC') return cat;
+    if (cat) return null;
+    const title = (form.title || '').trim().toUpperCase();
+    if (title.startsWith('ASTM') || title.startsWith('AAMI') || title.startsWith('ANSI/AAMI')) return 'ASTM';
+    if (title.startsWith('EN ') || title.startsWith('BS EN ')) return 'EN';
+    if (title.startsWith('ISO')) return 'ISO';
+    if (title.startsWith('IEC')) return 'IEC';
+    return null;
+  }, [form.category, form.title]);
 
   const filteredStandards = useMemo(() => {
     if (filterCategory === 'all') return standards;
@@ -392,7 +475,16 @@ export default function Standards() {
   const handleResolveUrl = async () => {
     if (!form.title.trim()) { toast.error('請先填寫「法規名稱」（例如 ISO 10993-1）'); return; }
     setResolving(true);
-    const tId = toast.loading('正在以虛擬瀏覽器到 ISO 官網搜尋（約需數十秒）...');
+    // IEC / EN 為純 HTTP（數秒內完成）；ISO 官網受 Cloudflare 防護，需虛擬瀏覽器。
+    const tId = toast.loading(
+      resolveSource === 'IEC' ? '正在到 IEC 官網搜尋...'
+        : resolveSource === 'EN' ? '正在比對歐盟協調標準公報清單...'
+          : resolveSource === 'EU' ? '正在查詢 EUR-Lex 與執委會指引清單...'
+            : resolveSource === 'MDCG' ? '正在比對執委會 MDCG 指引清單...'
+              : resolveSource === 'TW' ? '正在查詢全國法規資料庫...'
+                : resolveSource === 'FDA' ? '正在比對 FDA 指引清單...'
+                  : resolveSource === 'ASTM' ? '正在查詢 ASTM 官網現行版...'
+            : '正在以虛擬瀏覽器到 ISO 官網搜尋（約需數十秒）...');
     try {
       const res = await api.resolveStandardUrl({ standard_name: form.title, current_version: form.current_version, standard_id: editing?.id || null });
       setForm((f) => ({ ...f, source_url: res.source_url, latest_version: res.now_year || res.now_title || f.latest_version, last_checked: res.last_checked || new Date().toISOString() }));
@@ -547,8 +639,9 @@ export default function Standards() {
                     <tr>
                       <th>文件編號 / 法規名稱</th>
                       <th style={{ width: '160px' }}>狀態</th>
-                      <th style={{ width: '160px' }}>當前版本</th>
-                      <th style={{ width: '160px' }}>最新同步版本</th>
+                      <th style={{ width: '120px' }}>當前版本</th>
+                      {/* IEC 的版本字串較長（例：2005+AMD1:2012+AMD2:2020 CSV），需較寬欄位 */}
+                      <th style={{ width: '230px' }}>最新同步版本</th>
                       <th style={{ width: '180px' }}>上次檢查時間</th>
                       <th style={{ width: '120px', textAlign: 'right' }}>操作</th>
                     </tr>
@@ -596,18 +689,16 @@ export default function Standards() {
                         </td>
                         <td style={{ verticalAlign: 'middle' }}>
                           {(() => {
-                            const label = s.judge_label || (s.last_checked
-                              ? (s.has_update === 0 ? '🟢 已是最新版' : s.has_update === 2 ? '⚠️ 修訂中' : '📢 有更新')
-                              : null);
-                            if (!label) return <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic', fontSize: '0.85rem' }}>尚未掃描</span>;
-                            const isGood = label.includes('無更新') || label.includes('最新版');
-                            const isDanger = label.includes('作廢') || label.includes('已改版');
-                            const color = isGood ? 'var(--accent-success)' : isDanger ? 'var(--accent-danger)' : 'var(--accent-warning)';
-                            const bg = isGood ? 'rgba(34,197,94,0.1)' : isDanger ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)';
+                            const badges = getStatusBadges(s);
+                            if (!badges) return <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic', fontSize: '0.85rem' }}>尚未掃描</span>;
                             return (
-                              <span style={{ fontSize: '0.8rem', padding: '3px 8px', borderRadius: '6px', background: bg, color, border: `1px solid ${color}`, fontWeight: 600, whiteSpace: 'pre-wrap', lineHeight: '1.4', display: 'inline-block', maxWidth: '140px' }}>
-                                {label}
-                              </span>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                {badges.map((b, i) => (
+                                  <span key={i} style={{ fontSize: '0.8rem', padding: '3px 8px', borderRadius: '6px', background: b.bg, color: b.color, border: `1px solid ${b.color}`, fontWeight: 600, whiteSpace: 'pre-wrap', lineHeight: '1.4', display: 'inline-block', maxWidth: '140px' }}>
+                                    {b.text}
+                                  </span>
+                                ))}
+                              </div>
                             );
                           })()}
                         </td>
@@ -617,7 +708,7 @@ export default function Standards() {
                             : <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic', fontSize: '0.85rem' }}>未註記</span>}
                         </td>
                         <td style={{ verticalAlign: 'middle' }}>
-                          <span style={{ color: s.has_update ? 'var(--accent-warning)' : 'var(--text-secondary)', fontWeight: s.has_update ? 700 : 400, fontFamily: 'var(--font-mono)', fontSize: '0.9rem' }}>
+                          <span style={{ color: s.has_update ? 'var(--accent-warning)' : 'var(--text-secondary)', fontWeight: s.has_update ? 700 : 400, fontFamily: 'var(--font-mono)', fontSize: '0.85rem', lineHeight: 1.4, wordBreak: 'break-word' }}>
                             {s.latest_version || (s.has_update ? '檢測到更新' : (s.current_version || '同步中'))}
                           </span>
                         </td>
@@ -689,15 +780,29 @@ export default function Standards() {
                 <label className="form-label">官方來源網址</label>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <input className="form-input" value={form.source_url} onChange={(e) => setForm({ ...form, source_url: e.target.value })} placeholder="IEC/ISO 官網頁面" style={{ flex: 1, minWidth: 0 }} />
-                  {(form.category || '').trim() === 'ISO' && (
-                    <button type="button" className="btn btn-secondary" onClick={handleResolveUrl} disabled={resolving || !form.title.trim()} title="以虛擬瀏覽器到 ISO 官網搜尋此法規並自動填入官方網址" style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
-                      {resolving ? <><div className="spinner" style={{ width: '14px', height: '14px' }}></div> 搜尋中</> : <><Search size={16} /> ISO 查找</>}
+                  {resolveSource && (
+                    <button type="button" className="btn btn-secondary" onClick={handleResolveUrl} disabled={resolving || !form.title.trim()} title={`到 ${resolveSource} 官網搜尋此法規並自動填入官方網址`} style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
+                      {resolving ? <><div className="spinner" style={{ width: '14px', height: '14px' }}></div> 搜尋中</> : <><Search size={16} /> {resolveSource} 查找</>}
                     </button>
                   )}
                 </div>
-                {(form.category || '').trim() === 'ISO' && (
+                {resolveSource && (
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '4px', display: 'block' }}>
-                    依「法規名稱」到 ISO 官網查找官方頁面（僅針對此筆，需本機 Chrome）
+                    {resolveSource === 'IEC'
+                      ? '依「法規名稱」到 IEC 官網查找官方頁面（僅針對此筆，數秒內完成）'
+                      : resolveSource === 'EN'
+                        ? '依「法規名稱」比對歐盟 MDR 協調標準官方公報清單（僅針對此筆，數秒內完成）'
+                        : resolveSource === 'EU'
+                          ? '查詢 EUR-Lex 現行合併版或執委會指引清單版本（僅針對此筆，數秒內完成）'
+                          : resolveSource === 'MDCG'
+                            ? '比對執委會 MDCG 指引清單的修訂版次（僅針對此筆，數秒內完成）'
+                            : resolveSource === 'TW'
+                              ? '依法規名稱查詢全國法規資料庫的最後修正日期（僅針對此筆）'
+                              : resolveSource === 'FDA'
+                                ? '比對 FDA 官方指引清單的發布日期，或查 eCFR 條文修訂日期（僅針對此筆）'
+                                : resolveSource === 'ASTM'
+                                  ? '由 ASTM 官網短代號轉址取得現行版（AAMI 受防護無法自動查詢）'
+                                  : '依「法規名稱」到 ISO 官網查找官方頁面（僅針對此筆，需本機 Chrome）'}
                   </span>
                 )}
               </div>

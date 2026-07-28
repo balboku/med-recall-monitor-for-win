@@ -24,32 +24,124 @@ class ResolveUrlRequest(BaseModel):
     standard_id: Optional[int] = None  # 若為既有標準，查找成功後回寫「最新查找版本/日期」
 
 
+def _resolve_source_kind(standard_name: str, standard_id: Optional[int]) -> str:
+    """判斷此筆法規應到哪個來源查找：'ISO'、'IEC' 或 'EN'。
+
+    優先採用資料庫既有的「類別」欄位，其次以法規名稱前綴推斷（新增中的標準尚未存檔）。
+    EN 須優先判斷：'EN ISO 13485' 同時含 EN 與 ISO，但應走歐盟協調標準清單而非 ISO 官網。
+    """
+    name = standard_name.strip().upper()
+    if standard_id:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT category, notes FROM standards WHERE id = ?", (standard_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        if row:
+            for field in (row["category"], row["notes"]):
+                value = (field or "").strip().upper()
+                if value.startswith("TAIWAN TFDA"):
+                    return "TW"
+                if value.startswith("FDA"):
+                    return "FDA"
+                if "ASTM" in value or "AAMI" in value:
+                    return "ASTM"
+                if value == "INTERNATIONAL / OTHER":
+                    return "OTHER"
+                if value == "MDCG GUIDANCE":
+                    return "MDCG"
+                if value == "EU REGULATION":
+                    return "EU"
+                if value in ("EN ISO / EN", "BS EN", "EN"):
+                    return "EN"
+                if value in ("ISO", "IEC"):
+                    return value
+    if name.startswith(("ASTM", "AAMI", "ANSI/AAMI")):
+        return "ASTM"
+    if name.startswith(("EN ", "BS EN ")):
+        return "EN"
+    return "IEC" if name.startswith("IEC") else "ISO"
+
+
 @router.post("/resolve-url")
 async def resolve_source_url(req: ResolveUrlRequest):
-    """以虛擬瀏覽器到 ISO 官網搜尋此單一法規，找到官方標準頁網址並解析 Life cycle。
+    """到官網搜尋此單一法規，找到官方標準頁網址並解析生命週期。
 
+    ISO 官網受 Cloudflare 防護，需以虛擬瀏覽器存取；
+    IEC webstore 提供可直接呼叫的搜尋 API，純 HTTP 即可，速度快很多。
     成功回傳 source_url 供前端填入「官方來源網址」，並附帶版本判讀（現行版／是否有新版）。
     """
     name = (req.standard_name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="請先填寫法規名稱")
 
-    from crawlers import iso_browser
-    if not iso_browser.BROWSER_AVAILABLE:
-        raise HTTPException(
-            status_code=503,
-            detail="伺服器未安裝虛擬瀏覽器(nodriver)或本機 Chrome，無法執行 ISO 官網查找。",
-        )
-    try:
-        # 瀏覽器須在獨立工作執行緒以全新事件迴圈執行，避免與 FastAPI 事件迴圈巢狀
-        result = await asyncio.to_thread(
-            iso_browser.resolve_source_url_sync, name, (req.current_version or "").strip()
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"ISO 官網查找失敗：{e}")
+    kind = _resolve_source_kind(name, req.standard_id)
+    version = (req.current_version or "").strip()
+
+    if kind == "OTHER":
+        from crawlers import other_docs
+        result = await other_docs.resolve_source_url(name, version)
+    elif kind == "ASTM":
+        from crawlers import astm_aami
+        try:
+            result = await astm_aami.resolve_source_url(name, version)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"ASTM／AAMI 查詢失敗：{e}")
+    elif kind == "FDA":
+        from crawlers import fda_docs
+        try:
+            result = await fda_docs.resolve_source_url(name, version)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"FDA 指引／CFR 查詢失敗：{e}")
+    elif kind == "TW":
+        from crawlers import tw_regulation
+        try:
+            result = await tw_regulation.resolve_source_url(name, version)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"全國法規資料庫查詢失敗：{e}")
+    elif kind == "MDCG":
+        from crawlers import mdcg_guidance
+        try:
+            result = await mdcg_guidance.resolve_source_url(name, version)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"MDCG 指引清單查詢失敗：{e}")
+    elif kind == "EU":
+        from crawlers import eu_regulation
+        try:
+            result = await eu_regulation.resolve_source_url(name, version)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"EU 法規查詢失敗：{e}")
+    elif kind == "EN":
+        from crawlers import en_harmonised
+        try:
+            result = await en_harmonised.resolve_source_url(name, version)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"歐盟協調標準清單查詢失敗：{e}")
+    elif kind == "IEC":
+        from crawlers import iec_api
+        try:
+            result = await iec_api.resolve_source_url(name, version)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"IEC 官網查找失敗：{e}")
+    else:
+        from crawlers import iso_browser
+        if not iso_browser.BROWSER_AVAILABLE:
+            raise HTTPException(
+                status_code=503,
+                detail="伺服器未安裝虛擬瀏覽器(nodriver)或本機 Chrome，無法執行 ISO 官網查找。",
+            )
+        try:
+            # 瀏覽器須在獨立工作執行緒以全新事件迴圈執行，避免與 FastAPI 事件迴圈巢狀
+            result = await asyncio.to_thread(
+                iso_browser.resolve_source_url_sync, name, version
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"ISO 官網查找失敗：{e}")
 
     if not result.get("ok"):
-        raise HTTPException(status_code=404, detail=result.get("error", "找不到相符的 ISO 標準頁"))
+        raise HTTPException(status_code=404, detail=result.get("error", f"找不到相符的 {kind} 標準頁"))
 
     # 既有標準：回寫「最新查找版本」(latest_version) 與「最新查找日期」(last_checked)，
     # 並依判讀結果更新 has_update，供清單與編輯頁顯示。
@@ -59,13 +151,15 @@ async def resolve_source_url(req: ResolveUrlRequest):
         try:
             conn.execute(
                 """UPDATE standards
-                   SET latest_version = ?, last_checked = ?, has_update = ?, judge_label = ?, updated_at = ?
+                   SET latest_version = ?, last_checked = ?, has_update = ?, judge_label = ?,
+                       judge_categories = ?, updated_at = ?
                    WHERE id = ?""",
                 (
                     result.get("now_year") or result.get("now_title") or "",
                     now_iso,
                     1 if result.get("has_update") else 0,
                     result.get("judge_label") or "",
+                    ",".join(result.get("judge_categories") or []),
                     now_iso,
                     req.standard_id,
                 ),

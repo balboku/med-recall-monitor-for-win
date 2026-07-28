@@ -193,200 +193,20 @@ def pick_target(results, crawler, base_query):
 
 # ---------------------------------------------------------------------------
 # ISO 法規版本更新判定（依「ISO 法規版本更新判定邏輯規則.md」）
+#
+# 判定規則本身與來源網站無關，已抽離至 crawlers/standards_common.py 供 ISO 與
+# IEC 等來源共用；此處保留原有名稱轉接，維持既有呼叫端（standards.py、scripts/）不變。
 # ---------------------------------------------------------------------------
-def detect_doc_type(doc_str: str) -> str:
-    """第一步：文件類型字串判定。回傳 'AMD'|'COR'|'ADD'|'TS'|'TR'|'PAS'|'Main'。
-
-    依規則順序：先判後綴(Amd/Cor/Add)，再判前綴(TS/TR/PAS)，都沒命中才視為主標準(Main)。
-    寬鬆比對：資料庫的版本可能寫成 '2018+Amd 1:2021'（用 +），故以是否含 'amd/cor/add' 字樣判定。
-    """
-    s = (doc_str or "")
-    low = s.lower()
-    if re.search(r"\bamd\b|/amd|\+amd", low):
-        return "AMD"
-    if re.search(r"\bcor\b|/cor|\+cor", low):
-        return "COR"
-    if re.search(r"\badd\b|/add|\+add", low):
-        return "ADD"
-    if re.search(r"iso\s*/\s*ts", low):
-        return "TS"
-    if re.search(r"iso\s*/\s*tr", low):
-        return "TR"
-    if re.search(r"iso\s*/\s*pas", low):
-        return "PAS"
-    return "Main"
-
-
-def _norm_doc(s: str) -> str:
-    """文件字串正規化（移除所有非英數字、轉小寫）以利跨格式比對，
-    例如 'ISO 11737-1:2018/Amd 1:2021' 與 'ISO 11737-1:2018+Amd 1:2021' 視為相同。"""
-    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+from crawlers.standards_common import (  # noqa: E402
+    detect_doc_type,
+    norm_doc as _norm_doc,
+    judge_update,
+)
 
 
 def _entry_is_amd_or_cor(title: str) -> bool:
     return detect_doc_type(title) in ("AMD", "COR", "ADD")
 
-
-def judge_update(user_title: str, user_version: str, lc: dict, db_docs=None) -> dict:
-    """第二、三步：依文件落在 NOW / Previously 區塊、文件類型，並結合內部資料庫比對，判定更新狀態。
-
-    db_docs: 內部資料庫中「同編號」已收錄文件的正規化字串集合（_norm_doc 後）。
-             用於 NOW 主標準的「缺補充件」交叉比對；None 視為空集合。
-
-    回傳：
-        judge_status: 'valid' | 'missing_supplement' | 'missing_main' | 'obsolete' | 'integrated' | 'not_found' | 'unknown'
-        judge_label:  中文狀態標籤（依規則「狀態欄位輸出值」）
-        judge_message: 給使用者的提示
-        has_update:   是否需提醒（valid=False，其餘視情況 True）
-        now_main:     NOW 區塊的主標準字串（供提示用）
-    """
-    db_docs = db_docs or set()
-    # 組出使用者持有的完整文件字串（法規名稱 + 版本）
-    uv = (user_version or "").strip()
-    if uv:
-        user_doc = f"{user_title}:{uv}" if not re.match(r"^\s*[:：]", uv) else f"{user_title}{uv}"
-    else:
-        user_doc = user_title or ""
-    doc_type = detect_doc_type(user_doc)
-
-    now_list = lc.get("now_list") or ([(lc.get("now_status", ""), lc.get("now_title", ""))]
-                                      if lc.get("now_title") else [])
-    prev_list = lc.get("previously") or []
-
-    # NOW 區塊的主標準（第一筆非 Amd/Cor）
-    now_main = ""
-    now_has_amdcor = False
-    for _st, t in now_list:
-        if _entry_is_amd_or_cor(t):
-            now_has_amdcor = True
-        elif not now_main:
-            now_main = t
-    if not now_main and now_list:
-        now_main = now_list[0][1]
-
-    un = _norm_doc(user_doc)
-    now_norm = {_norm_doc(t): t for _st, t in now_list}
-    prev_norm = {_norm_doc(t): t for _st, t in prev_list}
-
-    # NOW 區塊中的附屬文件（Amd/Cor/Add）
-    now_amdcor_titles = [t for _st, t in now_list if _entry_is_amd_or_cor(t)]
-
-    _valid = {
-        "judge_status": "valid",
-        "judge_label": "無更新",
-        "judge_message": "文件與附屬資料皆為最新且齊全，無需動作。",
-        "has_update": False,
-        "now_main": now_main,
-    }
-
-    # 情境二：落於 NOW（雙向家族完整性檢查）
-    # 主標準為最新；需與內部資料庫交叉比對「主標準＋附屬文件」家族是否齊全。
-    if un in now_norm:
-        # 缺附屬文件：資料庫【有】主標準，但【無】官網列出的 AMD/COR
-        if doc_type in ("Main", "TS", "TR", "PAS") and now_amdcor_titles:
-            missing = [t for t in now_amdcor_titles if _norm_doc(t) not in db_docs]
-            if missing:
-                # 動態辨識缺少的附屬文件類型（AMD / COR；ADD 視為 AMD）
-                miss_types = []
-                for t in missing:
-                    dt = detect_doc_type(t)
-                    lab = "COR" if dt == "COR" else "AMD"
-                    if lab not in miss_types:
-                        miss_types.append(lab)
-                types_str = " / ".join(miss_types) if miss_types else "AMD"
-                return {
-                    "judge_status": "missing_supplement",
-                    "missing_types": miss_types,
-                    "missing_supplements": missing,
-                    "judge_label": f"有更新 (缺少 {types_str})",
-                    "judge_message": (
-                        f"您的主標準 {now_main} 為現行版本，但系統發現缺少最新的補充文件 "
-                        f"{', '.join(missing)}，請盡速更新資料庫。"),
-                    "has_update": True,
-                    "now_main": now_main,
-                }
-        # 缺主標準（新規則）：資料庫【有】附屬文件，但【無】主標準本體。
-        # db_docs 必為非空（至少含目前判定的這筆紀錄），故 db_docs 非空才檢查，
-        # 避免標準未收錄於資料庫時誤判為「缺少主標準」。
-        if now_main and db_docs and _norm_doc(now_main) not in db_docs:
-            return {
-                "judge_status": "missing_main",
-                "missing_types": [],
-                "missing_supplements": [],
-                "judge_label": "有更新 (缺少主標準)",
-                "judge_message": (
-                    f"系統發現資料庫已收錄補充文件，但缺少對應的最新主標準本體 "
-                    f"{now_main}。補充文件無法獨立使用，請盡速補充主標準。"),
-                "has_update": True,
-                "now_main": now_main,
-            }
-        # 無附屬文件、或家族文件皆已齊全、或使用者本身持有的就是 NOW 附屬文件 → 無更新
-        return _valid
-
-    # 情境三：落於 Previously（持有舊版，需升級）
-    if un in prev_norm:
-        if doc_type in ("AMD", "ADD"):
-            return {
-                "judge_status": "integrated",
-                "judge_label": "有更新 (舊版已整合)",
-                "judge_message": (
-                    f"您持有的舊版修正案已失效，相關技術變更已整合至最新版主標準 "
-                    f"{now_main or '（最新版）'}，請直接取得最新版主標準。"),
-                "has_update": True,
-                "now_main": now_main,
-            }
-        if doc_type == "COR":
-            return {
-                "judge_status": "integrated",
-                "judge_label": "有更新 (舊版已整合)",
-                "judge_message": (
-                    f"您持有的舊版技術勘誤已失效，相關勘誤已於最新版主標準 "
-                    f"{now_main or '（最新版）'} 中修正，請直接取得最新版主標準。"),
-                "has_update": True,
-                "now_main": now_main,
-            }
-        # Main / TS / TR / PAS：舊版主標準已改版。
-        # 情境三A 進階檢查：若 NOW 區塊另有生效中的附屬文件(AMD/COR)，提示一併取得。
-        if now_amdcor_titles:
-            sup = ", ".join(now_amdcor_titles)
-            obsolete_msg = (
-                f"您持有的舊版主標準已改版，請更新至最新主標準 {now_main or '（最新版）'}。"
-                f"注意：新版主標準已發布補充文件 {sup}，請一併取得。")
-        else:
-            obsolete_msg = (
-                f"您持有的舊版主標準已改版，請更新至最新主標準 {now_main or '（最新版）'}。")
-        return {
-            "judge_status": "obsolete",
-            "judge_label": "有更新 (主標準已改版)",
-            "judge_message": obsolete_msg,
-            "has_update": True,
-            "now_main": now_main,
-        }
-
-    # 未在 NOW / Previously 找到：以年份回退判斷（避免漏接），標記為無法精確判定
-    now_year_m = re.search(r":(\d{4})", now_main)
-    now_year = now_year_m.group(1) if now_year_m else ""
-    uv_year_m = re.search(r"(\d{4})", uv)
-    uv_year = uv_year_m.group(1) if uv_year_m else ""
-    if now_year and uv_year and now_year != uv_year:
-        return {
-            "judge_status": "obsolete",
-            "judge_label": "有更新 (主標準已改版)",
-            "judge_message": (
-                f"您持有的版本（{uv_year}）未出現在官網現行清單，且現行版為 {now_main}，"
-                f"研判已改版，請確認並更新。"),
-            "has_update": True,
-            "now_main": now_main,
-        }
-    return {
-        "judge_status": "unknown",
-        "judge_label": "⚪ 無法判定",
-        "judge_message": (
-            f"未能在官網 Life cycle 的 NOW / Previously 區塊比對到您持有的版本"
-            f"（{user_doc}），請人工確認。現行版：{now_main or '未知'}。"),
-        "has_update": False,
-        "now_main": now_main,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -452,8 +272,10 @@ def _build_not_found_result(search_url: str, standard_name: str, current_version
         "now_list": [], "previously": [],
         "newer_title": "", "newer_kind": "", "newer_year": "", "newer_url": "",
         "doc_type": doc_type,
+        "judge_statuses": ["not_found"],
+        "judge_categories": ["not_found"],
         "judge_status": "not_found",
-        "judge_label": "查無結果，可能已作廢",
+        "judge_label": "查無結果（可能已作廢）",
         "judge_message": msg,
         "now_main": "",
         "missing_types": [], "missing_supplements": [],
@@ -498,6 +320,8 @@ def _build_result(url: str, text: str, lc: dict, parsed: dict,
         "newer_url": newer_url,
         # 判定結果
         "doc_type": doc_type,
+        "judge_statuses": verdict["judge_statuses"],
+        "judge_categories": verdict["judge_categories"],
         "judge_status": verdict["judge_status"],
         "judge_label": verdict["judge_label"],
         "judge_message": verdict["judge_message"],
@@ -670,6 +494,51 @@ def resolve_source_url_sync(standard_name: str, current_version: str = "") -> di
     _ensure_available()
     with _browser_lock:
         return _run_sync(_resolve(standard_name, current_version))
+
+
+async def _fetch_many(urls: list, on_item=None) -> dict:
+    """批量取得多個網址的 HTML：『共用同一個瀏覽器視窗』依序處理，全部完成後才關閉。
+
+    urls: 網址字串列表（可含重複，重複者僅實際擷取一次）。
+    on_item: 選填回呼 on_item(url, html_or_None)，每處理完一筆即呼叫。
+    回傳 {url: html}；單筆失敗則該 url 對應 None，不影響其餘網址。
+    """
+    browser = await uc.start(headless=_headless())
+    out = {}
+    try:
+        for url in dict.fromkeys(urls):  # 保序去重
+            try:
+                _, html = await _open_and_wait(browser, url)
+                out[url] = html
+            except Exception as e:
+                logger.warning(f"[iso_browser] 批次取得 HTML 失敗（{url}）: {e}")
+                out[url] = None
+            if on_item is not None:
+                try:
+                    on_item(url, out[url])
+                except Exception as cb_err:  # 回呼錯誤不應中斷整批
+                    logger.warning(f"on_item 回呼錯誤（{url}）: {cb_err}")
+    finally:
+        try:
+            browser.stop()
+        except Exception:
+            pass
+    return out
+
+
+def fetch_many_sync(urls: list, on_item=None) -> dict:
+    """批量取得多個網址的 HTML，共用『同一個瀏覽器視窗』依序處理，全部完成後才關閉
+    （不會逐筆開關視窗）。用於例行掃描模式：標準已設定 source_url，僅需重新讀取頁面。
+
+    urls: 網址字串列表。
+    on_item: 選填回呼 on_item(url, html_or_None)，每處理完一筆即呼叫。
+    回傳 {url: html_or_None}。請以 asyncio.to_thread 呼叫。
+    """
+    _ensure_available()
+    if not urls:
+        return {}
+    with _browser_lock:
+        return _run_sync(_fetch_many(urls, on_item))
 
 
 def resolve_many_sync(items: list, on_item=None) -> dict:

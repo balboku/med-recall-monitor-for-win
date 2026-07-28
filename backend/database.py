@@ -226,6 +226,7 @@ def init_db():
             notes TEXT DEFAULT '',
             has_update INTEGER DEFAULT 0,
             judge_label TEXT DEFAULT '',
+            judge_categories TEXT DEFAULT '',
             last_checked TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -357,6 +358,7 @@ def migrate_db():
         ("ALTER TABLE adverse_events ADD COLUMN event_description_zh TEXT",),
         ("ALTER TABLE standards ADD COLUMN category TEXT DEFAULT ''",),
         ("ALTER TABLE standards ADD COLUMN judge_label TEXT DEFAULT ''",),
+        ("ALTER TABLE standards ADD COLUMN judge_categories TEXT DEFAULT ''",),
     ]
 
     migrated = 0

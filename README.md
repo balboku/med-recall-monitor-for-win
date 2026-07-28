@@ -362,20 +362,26 @@ ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 若想在同一內網（如辦公室 Wi-Fi）與同事分享系統，請依照以下步驟：
 
 1. **取得您的內網 IP**：
-   在 Windows 的 PowerShell 或 CMD 輸入 `ipconfig`，找到「IPv4 地址」（通常是 `192.168.x.x`）。
 
-2. **更新 CORS 白名單**：
-   修改 `docker-compose.yml` 中的 `ALLOWED_ORIGINS`，加入您的 IP（例如）：
+   - **圖形介面**：設定 > 網路和網際網路 > 進階網路設定 > 硬體及連線內容，找到目前**正在連線中**的網路，查看 **IPv4 位址**（例如 `192.168.20.38/24`，`/24` 是子網路遮罩標記，不是 IP 的一部分，取用時要拿掉）。
+   - **命令列**：在 PowerShell 或 CMD 輸入 `ipconfig`，找到「IPv4 位址」。
+
+2. **開放防火牆埠口**：
+   確保您的 Windows 防火牆允許外部連線至 **5173**（前端）埠口；若同事要直接呼叫後端 API 或看 Swagger，也需開放 **8000**（後端）。
+
+3. **把網址中的 `localhost` 換成您的內網 IP**：
+   例如原本是 `http://localhost:5173/standards`，換成 `http://192.168.20.38:5173/standards`，再提供給同事。
+
+   > **本機啟動（`restart_system.bat` / `start_frontend_local.bat`）模式下不需要另外調整 CORS**：[vite.config.js](frontend/vite.config.js) 已設定 `host: true`，Vite 會監聽 `0.0.0.0`；瀏覽器只會跟 Vite（5173）溝通，`/api` 是由 Vite 在伺服器端 proxy 轉給後端，屬於同源請求，不受 `ALLOWED_ORIGINS` 限制。
+
+4. **僅 Docker 模式才需要更新 CORS 白名單**：
+   若是用 `docker-compose.yml` 啟動，修改其中的 `ALLOWED_ORIGINS`，加入您的 IP（例如）：
    ```yaml
-   ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://192.168.1.100:5173
+   ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://192.168.20.38:5173
    ```
-   *注意：修改後需執行 `restart_system.bat` 重新啟動服務。*
+   修改後需重新執行 `docker compose up -d` 讓設定生效。
 
-3. **開放防火牆埠口**：
-   確保您的 Windows 防火牆允許外部連線至 **5173** (前端) 與 **8000** (後端) 埠口。
-
-4. **提供網址給同事**：
-   請同事在瀏覽器輸入 `http://<您的IP>:5173` 即可開始使用。
+**限制**：此方式僅限「同一區網內」的人存取（例如同辦公室 Wi-Fi），且您的電腦需保持開機、伺服器持續運作。若要分享給區網外的人，需改用 tunnel 工具（如 ngrok）或正式部署到雲端主機。
 
 ## 建議使用流程
 

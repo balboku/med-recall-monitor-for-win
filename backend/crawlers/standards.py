@@ -197,7 +197,13 @@ class StandardsCrawler(BaseCrawler):
         return ""
 
     async def _check_standard(self, standard_number: str, source_url: str, expected_title: str = "") -> dict:
-        """檢查單一標準的最新版本"""
+        """檢查單一標準的最新版本。
+
+        注意：iso.org 來源已改由 _resolve_iso_lifecycle()（例行模式的批次 ISO 專用管線，
+        走與『虛擬瀏覽器搜尋』模式相同的 Life cycle 判定邏輯）處理，process_group 不會再
+        對 iso.org 網域呼叫本函式；這裡保留 iso.org 分支僅作為虛擬瀏覽器不可用時的
+        HTTP 直接嘗試 fallback（雖多半會被 Cloudflare 擋下，但至少行為與過去一致）。
+        """
         try:
             if "iso.org" in source_url:
                 # www.iso.org 受 Cloudflare 防護，純 HTTP 會 403，改用虛擬瀏覽器取得頁面。
@@ -267,6 +273,78 @@ class StandardsCrawler(BaseCrawler):
         except Exception as e:
             logger.error(f"[{self.name}] 檢查 {standard_number} 失敗: {e}")
             return {}
+
+    def _resolve_iso_lifecycle(self, standard_number: str, source_url: str, expected_title: str,
+                               current_version: str, html: str) -> dict:
+        """例行模式的 ISO 標準專用管線：直接使用（批次）預先取得的 Life cycle 頁面 HTML，
+        走與『虛擬瀏覽器搜尋』模式完全相同的判定邏輯（parse_lifecycle + judge_update），
+        回傳格式與 iso_browser._build_result() 一致，可直接交給 _apply_browser_result() 回寫。
+
+        這是必要的：舊版 _check_standard()/_update_standard() 只比對版本號差異，
+        完全不會判斷「缺少主標準／缺少 AMD、COR、ADD 等附屬文件」，
+        而例行模式（'routine'）是預設的例行執行模式，若沿用舊管線，
+        缺件判定就永遠不會在日常掃描中出現。
+        """
+        from crawlers.iso_browser import parse_lifecycle
+        from crawlers.standards_common import judge_update, collect_db_docs, detect_doc_type
+
+        if not html:
+            logger.warning(
+                f"[{self.name}] {standard_number} 批次預先擷取 HTML 失敗"
+                f"（可能被 Cloudflare 擋下或逾時），略過本次檢查: {source_url}"
+            )
+            return {"ok": False, "error": "批次預先擷取 HTML 失敗"}
+
+        parsed = self._parse_iso_page(html)
+
+        # 驗證抓回的標準編號是否與預期一致，避免 source_url 指向錯誤文件（與 _check_standard 相同邏輯）
+        expected_base = self._extract_base_number(expected_title)
+        found_base = self._extract_base_number(parsed.get("full_title", ""))
+        if (
+            expected_base
+            and found_base
+            and self._normalize_base_number(expected_base) != self._normalize_base_number(found_base)
+        ):
+            logger.warning(
+                f"[{self.name}] {standard_number} 來源網址不符: "
+                f"預期「{expected_base}」，實際取得「{found_base}」 ({source_url})"
+            )
+            return {
+                "ok": False,
+                "title_mismatch": True,
+                "expected_title": expected_title,
+                "found_title": parsed.get("full_title", ""),
+            }
+
+        lc = parse_lifecycle(html)
+        db_docs = collect_db_docs(expected_title or standard_number)
+        verdict = judge_update(expected_title or standard_number, current_version, lc, db_docs)
+
+        now_title = lc["now_title"] or parsed.get("full_title", "")
+        now_year_m = re.search(r":(\d{4})", now_title)
+        now_year = now_year_m.group(1) if now_year_m else parsed.get("version_year", "")
+        doc_type = detect_doc_type(
+            f"{expected_title}:{current_version}" if current_version else expected_title
+        )
+
+        return {
+            "ok": True,
+            "source_url": source_url,
+            "found_title": parsed.get("full_title", ""),
+            "now_status": lc["now_status"] or parsed.get("status", ""),
+            "now_title": now_title,
+            "now_year": now_year,
+            "doc_type": doc_type,
+            "judge_statuses": verdict["judge_statuses"],
+            "judge_categories": verdict["judge_categories"],
+            "judge_status": verdict["judge_status"],
+            "judge_label": verdict["judge_label"],
+            "judge_message": verdict["judge_message"],
+            "now_main": verdict["now_main"],
+            "missing_types": verdict.get("missing_types", []),
+            "missing_supplements": verdict.get("missing_supplements", []),
+            "has_update": verdict["has_update"],
+        }
 
     def _normalize_version(self, version: str) -> str:
         """標準化版本字串以利比對（移除空白、統一大小寫）"""
@@ -488,12 +566,44 @@ class StandardsCrawler(BaseCrawler):
             conn.close()
 
     def _is_iso_standard(self, std: dict) -> bool:
-        """判斷標準是否屬於 ISO 類別（虛擬瀏覽器搜尋目前僅支援 ISO）。
+        """判斷標準是否屬於 ISO 類別。
         以「類別」欄位(category)為主，相容舊資料的分類(notes)，並輔以法規名稱(title)是否以 ISO 開頭。"""
-        category = (std.get("category") or "").strip()
-        notes = (std.get("notes") or "").strip()
+        return self._standard_source(std) == "ISO"
+
+    def _standard_source(self, std: dict):
+        """判斷此標準應以哪個官網來源查找：'ISO'、'IEC'、'EN'、'EU'、'MDCG'、'TW'、'FDA'、'ASTM'、'OTHER' 或 None。
+
+        ISO 走 iso_browser（官網受 Cloudflare 防護，需虛擬瀏覽器）；
+        IEC 走 iec_api（webstore 搜尋 API，純 HTTP 即可，速度快很多）；
+        EN / BS EN 走 en_harmonised（歐盟協調標準官方公報清單）。
+        以「類別」欄位(category)為主，相容舊資料的分類(notes)，並輔以法規名稱(title)前綴。
+        """
+        category = (std.get("category") or "").strip().upper()
+        notes = (std.get("notes") or "").strip().upper()
         title = (std.get("title") or "").strip().upper()
-        return category == "ISO" or notes == "ISO" or title.startswith("ISO")
+
+        # EU 法規／指引：僅以「類別」判斷，不以名稱推斷 ——
+        # 指引文件標題常引用法規編號，靠名稱猜會與其他類別互相誤判。
+        if category.startswith("TAIWAN TFDA") or notes.startswith("TAIWAN TFDA"):
+            return "TW"
+        if category.startswith("FDA") or notes.startswith("FDA"):
+            return "FDA"
+        if "ASTM" in category or "AAMI" in category or title.startswith(("ASTM", "AAMI", "ANSI/AAMI")):
+            return "ASTM"
+        if "INTERNATIONAL / OTHER" in (category, notes):
+            return "OTHER"
+        if "MDCG GUIDANCE" in (category, notes):
+            return "MDCG"
+        if "EU REGULATION" in (category, notes):
+            return "EU"
+        # EN 需優先於 ISO 判斷：'EN ISO 13485' 同時含 EN 與 ISO，但應走協調標準清單
+        if title.startswith(("EN ", "BS EN ")) or "EN" in (category, notes) or \
+                category in ("EN ISO / EN", "BS EN"):
+            return "EN"
+        for src in ("ISO", "IEC"):
+            if category == src or notes == src or title.startswith(src):
+                return src
+        return None
 
     def _apply_browser_result(self, std: dict, result: dict) -> bool:
         """將虛擬瀏覽器搜尋結果回寫資料庫（官方網址、最新查找版本/日期、是否有更新），
@@ -514,6 +624,7 @@ class StandardsCrawler(BaseCrawler):
                     last_checked = ?,
                     has_update = ?,
                     judge_label = ?,
+                    judge_categories = ?,
                     status = COALESCE(?, status),
                     updated_at = ?
                 WHERE id = ?
@@ -523,6 +634,7 @@ class StandardsCrawler(BaseCrawler):
                 now_iso,
                 has_update,
                 result.get("judge_label") or "",
+                ",".join(result.get("judge_categories") or []),
                 result.get("now_status") or None,
                 now_iso,
                 std["id"],
@@ -548,38 +660,61 @@ class StandardsCrawler(BaseCrawler):
         return bool(has_update)
 
     async def _browser_search_batch(self, standards: list):
-        """以『單一共用瀏覽器視窗』批量搜尋整批標準的 Life cycle（全程只開一次視窗）。
-        回傳 (checked, updated, skipped)。目前僅支援 ISO 類別，其餘類別略過。"""
-        import asyncio as _asyncio
-        from crawlers import iso_browser
+        """批量到官網搜尋整批標準的生命週期並回寫判定結果。
+        回傳 (checked, updated, skipped)。
 
-        # 篩出 ISO 標準（其餘略過），並建立批次清單
-        iso_items = []
+        依類別分派來源：
+          ISO → iso_browser（官網受 Cloudflare 防護，整批共用『單一瀏覽器視窗』）
+          IEC → iec_api（webstore 搜尋 API，純 HTTP，共用單一連線）
+          EN  → en_harmonised（歐盟協調標準官方公報清單，整批只下載一次）
+          EU  → eu_regulation（EUR-Lex 合併版 + 執委會指引清單）
+          MDCG→ mdcg_guidance（執委會 MDCG 指引清單，比對修訂版次）
+          TW  → tw_regulation（全國法規資料庫，比對最後修正日期）
+          FDA → fda_docs（FDA 指引資料集 + eCFR）
+          ASTM→ astm_aami（astm.org 短代號轉址取現行版；AAMI 受 Cloudflare 阻擋）
+          OTHER→ other_docs（知識型分類，非爬蟲；來源皆無公開版本清單）
+        其餘類別目前尚未支援，略過。
+        """
+        import asyncio as _asyncio
+        from crawlers import (iso_browser, iec_api, en_harmonised,
+                              eu_regulation, mdcg_guidance, tw_regulation,
+                              fda_docs, astm_aami, other_docs)
+
+        # 依來源分組，其餘略過
+        iso_items, iec_items, en_items = [], [], []
+        eu_items, mdcg_items, tw_items = [], [], []
+        fda_items, astm_items, other_items = [], [], []
         std_by_key = {}
         skipped = 0
         for std in standards:
-            if self._is_iso_standard(std):
-                key = str(std["id"])
-                std_by_key[key] = std
-                iso_items.append({
-                    "key": key,
-                    "standard_name": std.get("title") or "",
-                    "current_version": std.get("current_version") or "",
-                })
-            else:
+            source = self._standard_source(std)
+            if source is None:
                 skipped += 1
                 standards_progress.advance(skipped=True)
-                logger.info(f"[{self.name}] 略過（虛擬瀏覽器搜尋目前僅支援 ISO）: {std.get('standard_number')}")
+                logger.info(f"[{self.name}] 略過（官網搜尋目前僅支援 ISO / IEC / EN / EU / MDCG / 台灣法規 / FDA / ASTM）: {std.get('standard_number')}")
+                continue
+            key = str(std["id"])
+            std_by_key[key] = std
+            item = {
+                "key": key,
+                "standard_name": std.get("title") or "",
+                "current_version": std.get("current_version") or "",
+            }
+            {"ISO": iso_items, "IEC": iec_items, "EN": en_items, "EU": eu_items,
+             "MDCG": mdcg_items, "TW": tw_items, "FDA": fda_items,
+             "ASTM": astm_items, "OTHER": other_items}[source].append(item)
 
-        if not iso_items:
+        if not any((iso_items, iec_items, en_items, eu_items, mdcg_items,
+                    tw_items, fda_items, astm_items, other_items)):
             return 0, 0, skipped
-        if not iso_browser.BROWSER_AVAILABLE:
-            logger.warning(f"[{self.name}] 未安裝虛擬瀏覽器(nodriver)，無法執行搜尋，略過 {len(iso_items)} 筆")
+        if iso_items and not iso_browser.BROWSER_AVAILABLE:
+            logger.warning(f"[{self.name}] 未安裝虛擬瀏覽器(nodriver)，ISO 無法執行搜尋，略過 {len(iso_items)} 筆")
             for _ in iso_items:
                 standards_progress.advance(skipped=True)
-            return 0, 0, skipped + len(iso_items)
+            skipped += len(iso_items)
+            iso_items = []
 
-        # 每處理完一筆即回寫資料庫並更新進度（共用單一瀏覽器視窗、全部完成後才關閉）
+        # 每處理完一筆即回寫資料庫並更新進度
         counters = {"checked": 0, "updated": 0}
 
         def on_item(key, item, result):
@@ -617,7 +752,35 @@ class StandardsCrawler(BaseCrawler):
                 counters["updated"] += 1
             standards_progress.advance(updated=updated)
 
-        await _asyncio.to_thread(iso_browser.resolve_many_sync, iso_items, on_item)
+        # IEC 為純 HTTP，可直接在目前事件迴圈執行；
+        # ISO 需啟動 Chrome 子程序，必須在獨立工作執行緒以全新事件迴圈執行（見 iso_browser 說明）。
+        if iec_items:
+            logger.info(f"[{self.name}] IEC webstore 搜尋 {len(iec_items)} 筆")
+            await iec_api.resolve_many(iec_items, on_item)
+        if en_items:
+            logger.info(f"[{self.name}] EN 歐盟協調標準清單比對 {len(en_items)} 筆")
+            await en_harmonised.resolve_many(en_items, on_item)
+        if eu_items:
+            logger.info(f"[{self.name}] EU 法規／指引查詢 {len(eu_items)} 筆")
+            await eu_regulation.resolve_many(eu_items, on_item)
+        if mdcg_items:
+            logger.info(f"[{self.name}] MDCG 指引清單比對 {len(mdcg_items)} 筆")
+            await mdcg_guidance.resolve_many(mdcg_items, on_item)
+        if fda_items:
+            logger.info(f"[{self.name}] FDA 指引／CFR 查詢 {len(fda_items)} 筆")
+            await fda_docs.resolve_many(fda_items, on_item)
+        if astm_items:
+            logger.info(f"[{self.name}] ASTM／AAMI 查詢 {len(astm_items)} 筆")
+            await astm_aami.resolve_many(astm_items, on_item)
+        if other_items:
+            logger.info(f"[{self.name}] 其他國際文件分類 {len(other_items)} 筆")
+            await other_docs.resolve_many(other_items, on_item)
+        if tw_items:
+            logger.info(f"[{self.name}] 台灣法規查詢 {len(tw_items)} 筆（政府網站需放慢請求）")
+            await tw_regulation.resolve_many(tw_items, on_item)
+        if iso_items:
+            logger.info(f"[{self.name}] ISO 虛擬瀏覽器搜尋 {len(iso_items)} 筆")
+            await _asyncio.to_thread(iso_browser.resolve_many_sync, iso_items, on_item)
         return counters["checked"], counters["updated"], skipped
 
     async def run(self, historical: bool = False, product_ids: list = None, standard_id: int = None,
@@ -701,42 +864,116 @@ class StandardsCrawler(BaseCrawler):
                     domain = urlparse(source_url).netloc
                     domain_groups[domain].append(std)
 
+            # ISO 官網（iso.org）受 Cloudflare 防護，須以虛擬瀏覽器逐頁開啟。
+            # 為避免例行模式對整批 ISO 標準各自開關一次瀏覽器視窗（大量掃描時視窗會不斷
+            # 跳出干擾操作），這裡先以『單一瀏覽器視窗』一次取得整批 HTML，
+            # process_group 內解析 ISO 標準時一律使用預先擷取的結果，不再另行開啟瀏覽器。
+            iso_html_by_id = {}
+            iso_domains = [d for d in domain_groups if "iso.org" in d]
+            # 僅在虛擬瀏覽器可用且確實跑過批次預先擷取時，process_group 才改用預先擷取結果；
+            # 若未安裝 nodriver，維持原本逐筆 fallback（走 HTTP 嘗試）的行為，不受此次調整影響。
+            iso_batch_ready = False
+            if iso_domains:
+                from crawlers import iso_browser
+                if iso_browser.BROWSER_AVAILABLE:
+                    iso_batch_ready = True
+                    iso_stds = [s for d in iso_domains for s in domain_groups[d]]
+                    id_by_url = defaultdict(list)
+                    for s in iso_stds:
+                        id_by_url[s["source_url"]].append(s["id"])
+                    logger.info(f"[{self.name}] 以單一瀏覽器視窗批次取得 {len(id_by_url)} 個 ISO 官網頁面")
+                    html_by_url = await asyncio.to_thread(
+                        iso_browser.fetch_many_sync, list(id_by_url.keys())
+                    )
+                    for url, html in html_by_url.items():
+                        for sid in id_by_url.get(url, []):
+                            iso_html_by_id[sid] = html
+
             async def process_group(domain, stds):
                 grp_checked = 0
                 grp_updated = 0
+                is_iso_domain = "iso.org" in domain and iso_batch_ready
                 for std in stds:
                     standards_progress.set_current_title(std.get("title") or std.get("standard_number") or "")
-                    latest_info = await self._check_standard(
-                        std["standard_number"], std["source_url"], std.get("title", "")
-                    )
                     grp_checked += 1
-
                     updated = False
-                    if latest_info:
-                        updated = self._update_standard(std["id"], latest_info)
-                        if updated:
-                            grp_updated += 1
-                            has_update_val = self._is_under_revision(latest_info.get("status", ""))
-                            # 「已有新版本發布」的提醒已在 _update_standard 內建立，這裡不重複建立
-                            if not latest_info.get("_new_edition_alert_created"):
-                                alert_msg = (
-                                    f"標準 {std['standard_number']} 進入修訂中狀態，請關注後續版本發布"
-                                    if has_update_val
-                                    else f"最新版本: {latest_info.get('version', 'N/A')}"
+
+                    if is_iso_domain:
+                        # ISO：走與『虛擬瀏覽器搜尋』模式相同的 Life cycle 判定管線
+                        # （parse_lifecycle + judge_update），才能正確判定「缺少主標準／
+                        # 附屬文件」；直接沿用 _apply_browser_result() 回寫，與 browser 模式一致。
+                        result = self._resolve_iso_lifecycle(
+                            std["standard_number"], std["source_url"], std.get("title", ""),
+                            std.get("current_version") or "", iso_html_by_id.get(std["id"]),
+                        )
+                        if result.get("title_mismatch"):
+                            now_iso2 = datetime.now().isoformat()
+                            _conn = get_db()
+                            try:
+                                _conn.execute(
+                                    "UPDATE standards SET last_checked = ?, updated_at = ? WHERE id = ?",
+                                    (now_iso2, now_iso2, std["id"]),
                                 )
-                                alert_title = (
-                                    f"⚠️ 標準修訂中: {std['standard_number']}"
-                                    if has_update_val
-                                    else f"📋 標準更新: {std['standard_number']}"
+                                _conn.commit()
+                            finally:
+                                _conn.close()
+                            self.create_alert(
+                                alert_type="standard_url_mismatch",
+                                title=f"⚠️ 標準來源網址不符: {std['standard_number']}",
+                                message=(
+                                    f"預期文件「{result.get('expected_title', std.get('title'))}」，"
+                                    f"但 source_url 查到的是「{result.get('found_title', '')}」，"
+                                    f"目前網址: {std['source_url']}，請至追蹤設定修正來源網址。"
+                                ),
+                                source="IEC/ISO",
+                                reference_id=std["id"],
+                                reference_table="standards",
+                            )
+                        elif result.get("ok"):
+                            updated = self._apply_browser_result(std, result)
+                        else:
+                            # 批次預先擷取失敗：僅記錄檢查時間，不覆蓋既有判定結果
+                            now_iso2 = datetime.now().isoformat()
+                            _conn = get_db()
+                            try:
+                                _conn.execute(
+                                    "UPDATE standards SET last_checked = ?, updated_at = ? WHERE id = ?",
+                                    (now_iso2, now_iso2, std["id"]),
                                 )
-                                self.create_alert(
-                                    alert_type="standard_update",
-                                    title=alert_title,
-                                    message=alert_msg,
-                                    source="IEC/ISO",
-                                    reference_id=std["id"],
-                                    reference_table="standards",
-                                )
+                                _conn.commit()
+                            finally:
+                                _conn.close()
+                    else:
+                        latest_info = await self._check_standard(
+                            std["standard_number"], std["source_url"], std.get("title", "")
+                        )
+                        if latest_info:
+                            updated = self._update_standard(std["id"], latest_info)
+                            if updated:
+                                has_update_val = self._is_under_revision(latest_info.get("status", ""))
+                                # 「已有新版本發布」的提醒已在 _update_standard 內建立，這裡不重複建立
+                                if not latest_info.get("_new_edition_alert_created"):
+                                    alert_msg = (
+                                        f"標準 {std['standard_number']} 進入修訂中狀態，請關注後續版本發布"
+                                        if has_update_val
+                                        else f"最新版本: {latest_info.get('version', 'N/A')}"
+                                    )
+                                    alert_title = (
+                                        f"⚠️ 標準修訂中: {std['standard_number']}"
+                                        if has_update_val
+                                        else f"📋 標準更新: {std['standard_number']}"
+                                    )
+                                    self.create_alert(
+                                        alert_type="standard_update",
+                                        title=alert_title,
+                                        message=alert_msg,
+                                        source="IEC/ISO",
+                                        reference_id=std["id"],
+                                        reference_table="standards",
+                                    )
+
+                    if updated:
+                        grp_updated += 1
                     standards_progress.advance(updated=updated)
                 return grp_checked, grp_updated
 
