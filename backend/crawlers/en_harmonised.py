@@ -39,6 +39,8 @@ from crawlers.standards_common import (
     judge_update,
     collect_db_docs,
     normalize_base_number,
+    detect_doc_type,
+    SUPPLEMENT_TYPES,
 )
 
 logger = logging.getLogger(__name__)
@@ -239,6 +241,26 @@ def _lifecycle_from_entries(entries: list) -> dict:
     return lc
 
 
+def _compose_en_supplement_version(lc: dict, doc_type: str) -> str:
+    """附屬文件列的「最新同步版本」：只取公報現行引用中『同類型』的附屬文件。
+
+    依通用規則第 4 節「同類型對同類型」：持有 '/AC:2018' 的那一列要跟公報現行的 AC 比，
+    不能拿整份家族引用（'2016 + AC:2018 + A11:2021'）去比一份勘誤，
+    否則兩欄並排時無法解釋該列的徽章。
+
+    沿用 EN 的附屬文件寫法 '<主標準版次>/<附屬文件>'，例如 '2016/AC:2018'；
+    組不出時回傳空字串，由呼叫端回退。
+    """
+    parts = []
+    for _st, title in lc.get("now_list") or []:
+        if detect_doc_type(title, "en") != doc_type or ":" not in title:
+            continue
+        part = title.split(":", 1)[1].strip()
+        if part and part not in parts:
+            parts.append(part)
+    return " + ".join(parts)
+
+
 def _not_harmonised_result(title: str, parents: list, parent_rows: list) -> dict:
     """非協調標準：不在公報清單內，改以母標準（ISO/IEC）的追蹤結果輔助提示。"""
     if parent_rows:
@@ -266,8 +288,8 @@ def _not_harmonised_result(title: str, parents: list, parent_rows: list) -> dict
         "found_title": "",
         "now_status": "", "now_title": "", "now_stage": "", "now_year": "",
         "now_list": [], "previously": [],
-        "newer_title": "", "newer_kind": "", "newer_year": "", "newer_url": "",
-        "doc_type": "Main",
+        "newer_title": "", "newer_kind": "", "newer_url": "", "newer_year": "",
+        "doc_type": detect_doc_type(title, "en"),
         "judge_statuses": ["not_harmonised"],
         "judge_categories": ["unknown"],
         "judge_status": "not_harmonised",
@@ -338,15 +360,22 @@ def judge_en_standard(title: str, current_version: str, index: dict) -> dict:
     now_main = verdict.get("now_main") or lc["now_title"]
     year_m = re.search(r":(\d{4})", now_main)
 
-    # 現行引用的完整內容（主標準＋隨附修正案），作為「最新同步版本」顯示字串
+    # 「最新同步版本」顯示字串，依該筆的文件類型分兩種組法：
+    #   附屬文件列（/AC、/A11）→ 公報現行的『同類型』附屬文件（通用規則第 4 節）
+    #   主標準列              → 現行引用的完整內容（主標準＋隨附修正案），
+    #                           因 EN 的符合性推定是對整份引用成立（EN 規則第 6 節）
+    doc_type = detect_doc_type(user_doc, "en")
     in_force = [e for e in entries if e["in_force"]]
-    if in_force:
+    shown = ""
+    if doc_type in SUPPLEMENT_TYPES:
+        shown = _compose_en_supplement_version(lc, doc_type)
+    elif in_force:
         latest = max(in_force, key=lambda e: (e["start"] or datetime.min))
         shown = " + ".join(
             [latest["main_reference"].split(":", 1)[-1]]
             + [r.split("/", 1)[-1] for r in latest["references"][1:]]
         )
-    else:
+    if not shown:
         shown = year_m.group(1) if year_m else ""
 
     # 過渡期提醒：現行引用已公告失效日
@@ -370,7 +399,7 @@ def judge_en_standard(title: str, current_version: str, index: dict) -> dict:
         "now_list": [{"status": s, "title": t} for s, t in lc["now_list"]],
         "previously": [{"status": s, "title": t} for s, t in lc["previously"]],
         "newer_title": "", "newer_kind": "", "newer_year": "", "newer_url": "",
-        "doc_type": "Main",
+        "doc_type": doc_type,
         "judge_statuses": verdict["judge_statuses"],
         "judge_categories": verdict["judge_categories"],
         "judge_status": verdict["judge_status"],
@@ -390,16 +419,29 @@ def expand_consolidated(reference: str) -> list:
     'EN ISO 11607-1:2020+A1:2023' 代表持有 2020 本體且已含 A1:2023 修正案，
     等同同時收錄 'EN ISO 11607-1:2020' 與 'EN ISO 11607-1:2020/A1:2023'。
     若不展開，家族完整性比對會誤判為「缺少主標準」。
+
+    合併寫法之後可再掛獨立的附屬文件（本體已含 A1，之後官方又發了 AC）：
+    'EN ISO 11607-1:2020+A1:2023/AC:2024' 展開為 2020 本體、/A1:2023 與 /AC:2024 三份。
+    此處必須連 `/` 後綴一起吃下，否則整串會被當成單一份勘誤，
+    家族比對將誤判為「缺少（主標準本體）」。
+
+    僅有 `/` 而無 `+`（例 'EN ISO 13485:2016/AC:2018'）代表只持有該份附屬文件、
+    不含本體，不得展開。
     """
     ref = (reference or "").strip()
     out = [ref]
-    m = re.match(r"^(.*?:\s*\d{4})((?:\s*\+\s*A\w*[:\d]*)+)\s*$", ref, re.IGNORECASE)
+    m = re.match(
+        r"^(.*?:\s*\d{4})"              # 本體（含冒號年份）
+        r"((?:\s*\+\s*A\w*[:\d]*)+)"    # 已併入本體的修正案（一個以上，`+` 為必要）
+        r"((?:\s*/\s*A\w*[:\d]*)*)\s*$",  # 之後另行掛載的獨立附屬文件（可無）
+        ref, re.IGNORECASE,
+    )
     if not m:
         return out
     body = m.group(1).strip()
     out.append(body)
-    for amd in re.findall(r"\+\s*(A\w*:?\s*\d*)", m.group(2), re.IGNORECASE):
-        out.append(f"{body}/{amd.strip()}")
+    for sup in re.findall(r"[+/]\s*(A\w*:?\s*\d*)", m.group(2) + m.group(3), re.IGNORECASE):
+        out.append(f"{body}/{sup.strip()}")
     return out
 
 

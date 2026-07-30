@@ -199,10 +199,11 @@ class StandardsCrawler(BaseCrawler):
     async def _check_standard(self, standard_number: str, source_url: str, expected_title: str = "") -> dict:
         """檢查單一標準的最新版本。
 
-        注意：iso.org 來源已改由 _resolve_iso_lifecycle()（例行模式的批次 ISO 專用管線，
-        走與『虛擬瀏覽器搜尋』模式相同的 Life cycle 判定邏輯）處理，process_group 不會再
-        對 iso.org 網域呼叫本函式；這裡保留 iso.org 分支僅作為虛擬瀏覽器不可用時的
-        HTTP 直接嘗試 fallback（雖多半會被 Cloudflare 擋下，但至少行為與過去一致）。
+        注意：iso.org 與 iec.ch 來源都已改走與『虛擬瀏覽器搜尋』模式相同的判定管線
+        （ISO → _resolve_iso_lifecycle()；IEC → iec_api 的 edition 判定），
+        process_group 不會再對這兩個網域呼叫本函式；這裡保留 iso.org 分支僅作為
+        虛擬瀏覽器不可用時的 HTTP 直接嘗試 fallback（雖多半會被 Cloudflare 擋下，
+        但至少行為與過去一致），iec.ch 分支則保留給未預先查得結果的例外情況。
         """
         try:
             if "iso.org" in source_url:
@@ -286,7 +287,9 @@ class StandardsCrawler(BaseCrawler):
         缺件判定就永遠不會在日常掃描中出現。
         """
         from crawlers.iso_browser import parse_lifecycle
-        from crawlers.standards_common import judge_update, collect_db_docs, detect_doc_type
+        from crawlers.standards_common import (
+            judge_update, collect_db_docs, detect_doc_type, compose_now_version,
+        )
 
         if not html:
             logger.warning(
@@ -321,11 +324,15 @@ class StandardsCrawler(BaseCrawler):
         verdict = judge_update(expected_title or standard_number, current_version, lc, db_docs)
 
         now_title = lc["now_title"] or parsed.get("full_title", "")
-        now_year_m = re.search(r":(\d{4})", now_title)
-        now_year = now_year_m.group(1) if now_year_m else parsed.get("version_year", "")
+        # 「最新同步版本」顯示現行家族的完整版本（主標準＋現行附屬文件），例如 '2019+Amd 1:2022'
         doc_type = detect_doc_type(
             f"{expected_title}:{current_version}" if current_version else expected_title
         )
+        # 「最新同步版本」須與該筆文件同類型比對：主標準對主標準、附屬文件對附屬文件
+        now_year = compose_now_version(lc, doc_type)
+        if not now_year:
+            now_year_m = re.search(r":(\d{4})", now_title)
+            now_year = now_year_m.group(1) if now_year_m else parsed.get("version_year", "")
 
         return {
             "ok": True,
@@ -609,7 +616,12 @@ class StandardsCrawler(BaseCrawler):
         """將虛擬瀏覽器搜尋結果回寫資料庫（官方網址、最新查找版本/日期、是否有更新），
         並於判定有更新時建立提醒。回傳是否有更新。"""
         now_iso = datetime.now().isoformat()
-        has_update = 1 if result.get("has_update") else 0
+        # 「查無結果」不是「有更新」：官網根本沒查到這個標準，沒有任何新版本可言。
+        # has_update 會被 Dashboard／Analytics 以 has_update > 0 統計為「有更新的標準數」，
+        # 若把查無結果也算進去，等於謊報查到了新版本。改以 judge_categories 區分，
+        # 但仍然要建立提醒（可能已作廢需人工確認），故提醒條件另外納入 is_not_found。
+        is_not_found = "not_found" in (result.get("judge_categories") or [])
+        has_update = 0 if is_not_found else (1 if result.get("has_update") else 0)
         # 查無結果(情境一)時官網無現行版本資訊，保留原有 latest_version 不覆蓋為空
         latest_version = (
             result.get("now_year") or result.get("now_title") or std.get("latest_version") or ""
@@ -643,14 +655,15 @@ class StandardsCrawler(BaseCrawler):
         finally:
             conn.close()
 
-        if has_update:
-            # 依「ISO 法規版本更新判定邏輯規則」的判定結果建立提醒
+        if has_update or is_not_found:
+            # 依「ISO 法規版本更新判定邏輯規則」的判定結果建立提醒。
+            # 查無結果雖然不計入 has_update，仍需提醒文管人員人工確認是否已作廢。
             label = result.get("judge_label", "📢 有更新")
             judge_msg = result.get("judge_message") or (
                 f"目前版本 {std.get('current_version') or '未註記'} 與官網現行版 "
                 f"{result.get('now_status')} {result.get('now_title')} 不同")
             self.create_alert(
-                alert_type="standard_new_edition",
+                alert_type="standard_not_found" if is_not_found else "standard_new_edition",
                 title=f"{label}: {std['standard_number']} {std.get('title')}",
                 message=f"{judge_msg}（文件類型: {result.get('doc_type', '?')}；來源: {result.get('source_url')}）",
                 source="IEC/ISO",
@@ -889,10 +902,45 @@ class StandardsCrawler(BaseCrawler):
                         for sid in id_by_url.get(url, []):
                             iso_html_by_id[sid] = html
 
+            # IEC（webstore.iec.ch）同樣必須走與『虛擬瀏覽器搜尋』模式相同的判定管線
+            # （iec_api 的 edition 版本判定 + judge_update_iec），否則例行模式會沿用舊的
+            # _check_standard()/_update_standard()：只比對版本號、不寫入 judge_label／
+            # judge_categories，「缺少附屬文件／修訂中」等判定在日常掃描中永遠不會出現，
+            # 且畫面上的狀態會停留在舊管線寫下的過時字串。
+            # IEC 為純 HTTP 搜尋 API，整批共用同一個連線先行查完，再逐筆回寫。
+            iec_result_by_id = {}
+            iec_domains = [d for d in domain_groups if "iec.ch" in d]
+            if iec_domains:
+                from crawlers import iec_api
+                iec_stds = [s for d in iec_domains for s in domain_groups[d]]
+                logger.info(f"[{self.name}] 以 IEC webstore 搜尋 API 查詢 {len(iec_stds)} 筆 IEC 標準")
+                iec_result_by_id = await iec_api.resolve_many([
+                    {
+                        "key": s["id"],
+                        "standard_name": s.get("title") or s["standard_number"],
+                        "current_version": s.get("current_version") or "",
+                    }
+                    for s in iec_stds
+                ])
+
+            def touch_last_checked(std_id):
+                """僅記錄本次檢查時間，不覆蓋既有判定結果（抓取失敗或網址不符時使用）。"""
+                now_iso2 = datetime.now().isoformat()
+                _conn = get_db()
+                try:
+                    _conn.execute(
+                        "UPDATE standards SET last_checked = ?, updated_at = ? WHERE id = ?",
+                        (now_iso2, now_iso2, std_id),
+                    )
+                    _conn.commit()
+                finally:
+                    _conn.close()
+
             async def process_group(domain, stds):
                 grp_checked = 0
                 grp_updated = 0
                 is_iso_domain = "iso.org" in domain and iso_batch_ready
+                is_iec_domain = "iec.ch" in domain and bool(iec_result_by_id)
                 for std in stds:
                     standards_progress.set_current_title(std.get("title") or std.get("standard_number") or "")
                     grp_checked += 1
@@ -907,16 +955,7 @@ class StandardsCrawler(BaseCrawler):
                             std.get("current_version") or "", iso_html_by_id.get(std["id"]),
                         )
                         if result.get("title_mismatch"):
-                            now_iso2 = datetime.now().isoformat()
-                            _conn = get_db()
-                            try:
-                                _conn.execute(
-                                    "UPDATE standards SET last_checked = ?, updated_at = ? WHERE id = ?",
-                                    (now_iso2, now_iso2, std["id"]),
-                                )
-                                _conn.commit()
-                            finally:
-                                _conn.close()
+                            touch_last_checked(std["id"])
                             self.create_alert(
                                 alert_type="standard_url_mismatch",
                                 title=f"⚠️ 標準來源網址不符: {std['standard_number']}",
@@ -933,16 +972,20 @@ class StandardsCrawler(BaseCrawler):
                             updated = self._apply_browser_result(std, result)
                         else:
                             # 批次預先擷取失敗：僅記錄檢查時間，不覆蓋既有判定結果
-                            now_iso2 = datetime.now().isoformat()
-                            _conn = get_db()
-                            try:
-                                _conn.execute(
-                                    "UPDATE standards SET last_checked = ?, updated_at = ? WHERE id = ?",
-                                    (now_iso2, now_iso2, std["id"]),
-                                )
-                                _conn.commit()
-                            finally:
-                                _conn.close()
+                            touch_last_checked(std["id"])
+                    elif is_iec_domain:
+                        # IEC：走與『虛擬瀏覽器搜尋』模式相同的 edition 判定管線
+                        # （iec_api.judge_update_iec），並沿用 _apply_browser_result() 回寫，
+                        # 才會一併寫入 judge_label / judge_categories（通用規則第 6 節）。
+                        result = iec_result_by_id.get(std["id"]) or {}
+                        if result.get("ok"):
+                            updated = self._apply_browser_result(std, result)
+                        else:
+                            logger.warning(
+                                f"[{self.name}] {std['standard_number']} IEC 官網查找失敗，"
+                                f"略過本次判定: {result.get('error') or '無回傳結果'}"
+                            )
+                            touch_last_checked(std["id"])
                     else:
                         latest_info = await self._check_standard(
                             std["standard_number"], std["source_url"], std.get("title", "")

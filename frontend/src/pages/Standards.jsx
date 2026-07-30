@@ -26,7 +26,8 @@ import {
   AlertTriangle,
   CheckSquare,
   Layers,
-  SearchX
+  SearchX,
+  Clock
 } from 'lucide-react';
 
 const emptyForm = { standard_number: '', title: '', current_version: '', source_url: '', category: '', notes: '', latest_version: '', last_checked: '' };
@@ -39,12 +40,16 @@ function sleep(ms) {
 }
 
 // 後端 judge_categories 值 → 前端分類桶位／顯示樣式的對應表
+// 查無結果一律用灰色系（不與任何暖色系狀態共用色相）：官網完全查不到此標準，
+// 沒有任何版本資訊可比對，視覺上不應與「有更新」「缺少」等實際偵測到問題的狀態混淆。
 const CATEGORY_META = {
-  no_update:  { bucket: 'ok',       color: 'var(--accent-success)', bg: 'rgba(34,197,94,0.1)' },
-  has_update: { bucket: 'update',   color: 'var(--accent-warning)', bg: 'rgba(245,158,11,0.1)' },
-  missing:    { bucket: 'missing',  color: 'var(--accent-danger)',  bg: 'rgba(239,68,68,0.1)' },
-  not_found:  { bucket: 'notFound', color: 'var(--accent-danger)',  bg: 'rgba(239,68,68,0.1)' },
-  unknown:    { bucket: 'unknown',  color: 'var(--text-tertiary)',  bg: 'rgba(255,255,255,0.06)' },
+  no_update:      { bucket: 'ok',       color: 'var(--accent-success)', bg: 'rgba(34,197,94,0.1)' },
+  has_update:     { bucket: 'update',   color: 'var(--accent-warning)', bg: 'rgba(245,158,11,0.1)' },
+  missing:        { bucket: 'missing',  color: 'var(--accent-danger)',  bg: 'rgba(239,68,68,0.1)' },
+  not_found:      { bucket: 'notFound', color: 'var(--text-secondary)', bg: 'rgba(255,255,255,0.08)' },
+  // 修訂中：官網已預告改版但新版尚未發布，與「有更新」區分（現行出版品並未改變）
+  under_revision: { bucket: 'revision', color: 'var(--accent-info)',    bg: 'rgba(59,130,246,0.12)' },
+  unknown:        { bucket: 'unknown',  color: 'var(--text-tertiary)',  bg: 'rgba(255,255,255,0.06)' },
 };
 
 /** 判斷單一法規標準命中的狀態分類（一筆可能同時命中多個，例如「有更新」+「缺少」） */
@@ -58,8 +63,9 @@ function classifyStandard(s) {
   if (s.judge_label && s.judge_label.includes('缺少')) return ['missing'];
   if (s.judge_label && (s.judge_label.includes('查無結果') || s.judge_label.includes('作廢'))) return ['notFound'];
   if (s.judge_label && s.judge_label.includes('無法判定')) return ['unknown'];
+  if (s.judge_label && s.judge_label.includes('修訂中')) return ['revision'];
   if (s.has_update === 0) return ['ok'];          // 已是最新版
-  if (s.has_update === 2) return ['update'];      // 修訂中 → 待更新
+  if (s.has_update === 2) return ['revision'];    // 舊資料的「修訂中」枚舉值
   if (s.has_update === 1) return ['update'];      // 有更新 → 待更新
   if (s.judge_label) {
     const l = s.judge_label;
@@ -67,6 +73,11 @@ function classifyStandard(s) {
     return ['update'];
   }
   return ['unknown'];
+}
+
+/** 該筆是否為「查無結果」（官網完全找不到此標準，可能已作廢） */
+function isNotFound(s) {
+  return classifyStandard(s).includes('notFound');
 }
 
 /** 依 judge_categories／judge_label 組出狀態欄位要顯示的徽章（一筆可能同時顯示多個，例如「有更新」+「缺少」） */
@@ -89,7 +100,12 @@ function getStatusBadges(s) {
   }
   // 相容舊資料／尚未提供 judge_categories 的來源：整段文字以字串猜測上色
   const isGood = label.includes('無更新') || label.includes('最新版');
-  const isDanger = label.includes('作廢') || label.includes('已改版') || label.includes('查無結果');
+  // 「查無結果」獨立判斷，一律灰色系，不落入「作廢／已改版」的紅色（danger）分支
+  const isNotFoundLabel = label.includes('查無結果');
+  const isDanger = !isNotFoundLabel && (label.includes('作廢') || label.includes('已改版'));
+  if (isNotFoundLabel) {
+    return [{ text: label, color: 'var(--text-secondary)', bg: 'rgba(255,255,255,0.08)' }];
+  }
   const color = isGood ? 'var(--accent-success)' : isDanger ? 'var(--accent-danger)' : 'var(--accent-warning)';
   const bg = isGood ? 'rgba(34,197,94,0.1)' : isDanger ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)';
   return [{ text: label, color, bg }];
@@ -185,13 +201,13 @@ function OverviewTab({ standards }) {
     const total = standards.length;
     // 一筆標準可能同時命中多個分類（例如「有更新」+「缺少」），故每個命中的桶位都各自累加，
     // 卡片加總可能大於總數。
-    let ok = 0, update = 0, missing = 0, notFound = 0, unknown = 0;
+    let ok = 0, update = 0, missing = 0, notFound = 0, revision = 0, unknown = 0;
     const byCategory = {};
 
     standards.forEach((s) => {
       const classes = classifyStandard(s);
       const cat = s.category || '（未分類）';
-      if (!byCategory[cat]) byCategory[cat] = { total: 0, ok: 0, update: 0, missing: 0, notFound: 0, unknown: 0 };
+      if (!byCategory[cat]) byCategory[cat] = { total: 0, ok: 0, update: 0, missing: 0, notFound: 0, revision: 0, unknown: 0 };
       byCategory[cat].total++;
 
       classes.forEach((cls) => {
@@ -199,13 +215,14 @@ function OverviewTab({ standards }) {
         else if (cls === 'update') update++;
         else if (cls === 'missing') missing++;
         else if (cls === 'notFound') notFound++;
+        else if (cls === 'revision') revision++;
         else unknown++;
         byCategory[cat][cls] = (byCategory[cat][cls] || 0) + 1;
       });
     });
 
     const categories = Object.entries(byCategory).sort(([a], [b]) => a.localeCompare(b, 'zh-TW'));
-    return { total, ok, update, missing, notFound, unknown, categories };
+    return { total, ok, update, missing, notFound, revision, unknown, categories };
   }, [standards]);
 
   const cardStyle = (color, bg) => ({
@@ -256,13 +273,21 @@ function OverviewTab({ standards }) {
             </div>
             <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--accent-danger)' }}>{stats.missing}</div>
           </div>
-          {/* 查無結果 */}
-          <div style={cardStyle('var(--accent-danger)', 'rgba(239,68,68,0.08)')}>
-            <div style={{ fontSize: '0.8rem', color: 'var(--accent-danger)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {/* 查無結果：灰色系（官網完全查不到，沒有版本資訊可比對，不與有更新/缺少共用暖色） */}
+          <div style={cardStyle('var(--text-secondary)', 'rgba(255,255,255,0.05)')}>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <SearchX size={14} /> 查無結果
             </div>
-            <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--accent-danger)' }}>{stats.notFound}</div>
+            <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--text-secondary)' }}>{stats.notFound}</div>
             <div style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', marginTop: '-4px' }}>（可能已作廢）</div>
+          </div>
+          {/* 修訂中 */}
+          <div style={cardStyle('var(--accent-info)', 'rgba(59,130,246,0.08)')}>
+            <div style={{ fontSize: '0.8rem', color: 'var(--accent-info)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Clock size={14} /> 修訂中
+            </div>
+            <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--accent-info)' }}>{stats.revision}</div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', marginTop: '-4px' }}>（新版尚未發布）</div>
           </div>
           {/* 無法判定 */}
           <div style={cardStyle('var(--text-tertiary)', 'rgba(255,255,255,0.04)')}>
@@ -291,6 +316,7 @@ function OverviewTab({ standards }) {
                   <th style={{ width: '80px', textAlign: 'center' }}>待更新</th>
                   <th style={{ width: '100px', textAlign: 'center' }}>缺少法規</th>
                   <th style={{ width: '90px', textAlign: 'center' }}>查無結果</th>
+                  <th style={{ width: '80px', textAlign: 'center' }}>修訂中</th>
                   <th style={{ width: '80px', textAlign: 'center' }}>無法判定</th>
                 </tr>
               </thead>
@@ -323,7 +349,12 @@ function OverviewTab({ standards }) {
                     </td>
                     <td style={{ textAlign: 'center' }}>
                       {c.notFound > 0
-                        ? <span style={{ color: 'var(--accent-danger)', fontWeight: 700 }}>{c.notFound}</span>
+                        ? <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{c.notFound}</span>
+                        : <span style={{ color: 'var(--text-tertiary)' }}>—</span>}
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+                      {c.revision > 0
+                        ? <span style={{ color: 'var(--accent-info)', fontWeight: 700 }}>{c.revision}</span>
                         : <span style={{ color: 'var(--text-tertiary)' }}>—</span>}
                     </td>
                     <td style={{ textAlign: 'center' }}>
@@ -649,8 +680,12 @@ export default function Standards() {
                   <tbody>
                     {currentData.map((s) => (
                       <tr key={s.id} style={{
-                        background: s.has_update ? 'rgba(245, 158, 11, 0.05)' : 'transparent',
-                        borderLeft: s.has_update ? '3px solid var(--accent-warning)' : '3px solid transparent'
+                        // 查無結果一律用灰色標示（需人工確認是否已作廢），不與任何暖色系狀態共用色相，
+                        // 否則整列的視覺訊號可能誤讀為「查到新版本了」。
+                        background: isNotFound(s) ? 'rgba(255,255,255,0.05)'
+                          : (s.has_update ? 'rgba(245, 158, 11, 0.05)' : 'transparent'),
+                        borderLeft: isNotFound(s) ? '3px solid var(--text-secondary)'
+                          : (s.has_update ? '3px solid var(--accent-warning)' : '3px solid transparent')
                       }}>
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -708,9 +743,13 @@ export default function Standards() {
                             : <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic', fontSize: '0.85rem' }}>未註記</span>}
                         </td>
                         <td style={{ verticalAlign: 'middle' }}>
-                          <span style={{ color: s.has_update ? 'var(--accent-warning)' : 'var(--text-secondary)', fontWeight: s.has_update ? 700 : 400, fontFamily: 'var(--font-mono)', fontSize: '0.85rem', lineHeight: 1.4, wordBreak: 'break-word' }}>
-                            {s.latest_version || (s.has_update ? '檢測到更新' : (s.current_version || '同步中'))}
-                          </span>
+                          {isNotFound(s)
+                            // 查無結果：官網根本沒查到這個標準，沒有任何版本資訊可比對。
+                            // 不可沿用 has_update 的「檢測到更新」文案，否則等於謊報查到了新版本。
+                            ? <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic', fontSize: '0.85rem' }}>查無資料</span>
+                            : <span style={{ color: s.has_update ? 'var(--accent-warning)' : 'var(--text-secondary)', fontWeight: s.has_update ? 700 : 400, fontFamily: 'var(--font-mono)', fontSize: '0.85rem', lineHeight: 1.4, wordBreak: 'break-word' }}>
+                                {s.latest_version || (s.has_update ? '檢測到更新' : (s.current_version || '同步中'))}
+                              </span>}
                         </td>
                         <td style={{ verticalAlign: 'middle' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>

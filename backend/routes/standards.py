@@ -157,7 +157,10 @@ async def resolve_source_url(req: ResolveUrlRequest):
                 (
                     result.get("now_year") or result.get("now_title") or "",
                     now_iso,
-                    1 if result.get("has_update") else 0,
+                    # 「查無結果」不計入 has_update：官網沒查到此標準，並非偵測到新版本
+                    # （has_update 會被 Dashboard／Analytics 統計為「有更新的標準數」）
+                    0 if "not_found" in (result.get("judge_categories") or [])
+                    else (1 if result.get("has_update") else 0),
                     result.get("judge_label") or "",
                     ",".join(result.get("judge_categories") or []),
                     now_iso,

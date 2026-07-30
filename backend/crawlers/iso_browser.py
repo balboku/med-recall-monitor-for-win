@@ -114,7 +114,15 @@ def parse_lifecycle(html: str) -> dict:
     block = lines[start:end]
 
     STATUS = ("Published", "Withdrawn", "Under development", "Deleted")
-    std_re = re.compile(r"^(?:ISO|IEC)(?:/(?:IEC|TR|TS|PAS))?\s*[\d\-]+", re.IGNORECASE)
+    # 除了正式出版品的前綴（IEC/TR/TS/PAS），也需辨識「開發中草案」的階段前綴
+    # （CD 委員會草案、DIS 國際標準草案、FDIS 最終草案、AWI/NP/WD/PRF…）。
+    # 否則 'Will be replaced by → ISO/CD 8601-1' 這類預告改版的項目會完全比對不到，
+    # newer_title 永遠是空的，使用者也就看不到「官網已在開發下一版」的訊息。
+    std_re = re.compile(
+        r"^(?:ISO|IEC)(?:\s*/\s*(?:IEC|TR|TS|PAS|CD|DIS|FDIS|AWI|NP|WD|PRF|DTR|DTS))?"
+        r"\s*[\d\-]+",
+        re.IGNORECASE,
+    )
     year_re = re.compile(r":(\d{4})")
 
     section = None
@@ -125,6 +133,14 @@ def parse_lifecycle(html: str) -> dict:
         if low == "previously":
             section = "previously"; pending_status = ""; continue
         if low == "now":
+            section = "now"; pending_status = ""; continue
+        # 'Amendments' / 'Corrigenda' 是獨立於 'Now' 的區塊，但列出的都是現行主標準的
+        # 附屬文件，故一律歸入 now_list。必須明確辨識這個標題，否則若頁面上這個區塊
+        # 排在 'Will be replaced by' 等『newer』標題之後（版面常見排法），沒有被重新導回
+        # 'now'，區塊內的 Amd/Cor 條目就會被誤歸入 newer（或整個遺漏），造成系統誤判
+        # 「缺少附屬文件」判定失效，甚至進一步誤判為「缺少主標準」。
+        if low in ("amendments", "amendment", "corrigenda", "corrigendum",
+                   "technical corrigenda", "technical corrigendum"):
             section = "now"; pending_status = ""; continue
         if low in ("revised by", "will be replaced by", "new version available",
                    "corrected and reprinted", "confirmed"):
@@ -201,6 +217,7 @@ from crawlers.standards_common import (  # noqa: E402
     detect_doc_type,
     norm_doc as _norm_doc,
     judge_update,
+    compose_now_version,
 )
 
 
@@ -297,12 +314,15 @@ def _build_result(url: str, text: str, lc: dict, parsed: dict,
     newer_kind = lc["newer_kind"] or ("Revised by" if newer_title else "")
     newer_url = lc["newer_url"] or parsed.get("new_edition_url", "")
 
-    now_year_m = re.search(r":(\d{4})", now_title)
-    now_year = now_year_m.group(1) if now_year_m else parsed.get("version_year", "")
-
     # 依「ISO 法規版本更新判定邏輯規則」進行判定
     doc_type = detect_doc_type(f"{standard_name}:{current_version}" if current_version else standard_name)
     verdict = judge_update(standard_name, current_version, lc, db_docs)
+
+    # 「最新同步版本」須與該筆文件同類型比對：主標準對主標準、附屬文件對附屬文件
+    now_year = compose_now_version(lc, doc_type)
+    if not now_year:
+        now_year_m = re.search(r":(\d{4})", now_title)
+        now_year = now_year_m.group(1) if now_year_m else parsed.get("version_year", "")
 
     return {
         "ok": True,

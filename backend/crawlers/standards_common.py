@@ -29,6 +29,9 @@ def detect_doc_type(doc_str: str, flavor: str = "iso") -> str:
     flavor='iso' 回傳 'AMD'|'COR'|'ADD'|'TS'|'TR'|'PAS'|'Main'
         依規則順序：先判後綴(Amd/Cor/Add)，再判前綴(TS/TR/PAS)，都沒命中才視為主標準(Main)。
         寬鬆比對：資料庫的版本可能寫成 '2018+Amd 1:2021'（用 +），故以是否含 'amd/cor/add' 字樣判定。
+        注意：ISO 的 '2019+Amd 1:2022' 指的是「掛在 2019 版底下的修正案本身」，
+        前面的年份只是標示它所屬的主標準版次，不代表同時持有主標準本體，
+        故不可比照 IEC 的 '+AMD…CSV' 合併版視為主標準等價物。
 
     flavor='iec' 另可回傳 'ISH' 與 IEC_PRODUCT_FORMS 中的商品形式（如 'CSV'）。
         IEC 的判定順序與 ISO 不同：必須先看「以斜線掛載」的附屬文件（/AMD、/COR、/ISH），
@@ -123,6 +126,57 @@ def normalize_base_number(base: str) -> str:
     return re.sub(r"[^a-z0-9]", "", base.lower()) if base else ""
 
 
+def compose_now_version(lc: dict, doc_type: str = "Main", flavor: str = "iso") -> str:
+    """組出「最新同步版本」顯示字串，且必須與該筆文件『同類型』比對。
+
+    版本比對必須主標準對主標準、附屬文件對附屬文件，否則會出現
+    「當前版本 2005（主標準）vs 最新同步版本 2005+Amd 1:2018（含修正案）」
+    這種拿主標準去比對附屬文件的無意義比較。
+
+    doc_type 為該筆文件本身的類型（detect_doc_type 的結果）：
+        主標準類（Main/TS/TR/PAS）→ 回傳官網現行『主標準』的版本，例如 '2005'
+        附屬文件類（AMD/COR/ADD/ISH）→ 回傳官網現行『同類型附屬文件』的版本，
+            沿用資料庫慣例寫成 '<主標準版次>+<附屬文件>'，例如 '2019+Amd 1:2022'
+
+    回傳空字串代表無法組出（呼叫端應自行回退為原本的年份擷取結果）。
+    """
+    now_list = lc.get("now_list") or []
+    if not now_list:
+        return ""
+
+    # 官網現行主標準的版本部分
+    main_ver = ""
+    for _st, title in now_list:
+        if not entry_is_supplement(title, flavor) and ":" in title:
+            main_ver = title.split(":", 1)[1].strip()
+            break
+
+    if doc_type not in SUPPLEMENT_TYPES:
+        return main_ver
+
+    # 附屬文件列：只取官網現行『同類型』的附屬文件（AMD 對 AMD、COR 對 COR）
+    base_ver, sup_parts = "", []
+    for _st, title in now_list:
+        if not entry_is_supplement(title, flavor):
+            continue
+        if detect_doc_type(title, flavor) != doc_type:
+            continue
+        # 取出附屬文件描述，例如 'ISO 8601-1:2019/Amd 1:2022' -> 'Amd 1:2022'。
+        # 用正則鎖定 /Amd|/Cor|/Add，避免被 'ISO/TS 12345:2020/Amd 1:2023'
+        # 前面的 'ISO/TS' 斜線誤切。
+        m = re.search(r"/\s*((?:amd|cor|add|ish)\b.*)$", title, re.IGNORECASE)
+        part = m.group(1).strip() if m else ""
+        if not part or part in sup_parts:
+            continue
+        sup_parts.append(part)
+        if not base_ver and ":" in title:
+            # 該附屬文件所掛載的主標準版次，例如 'ISO 8601-1:2019/Amd 1:2022' -> '2019'
+            base_ver = title.split(":", 1)[1].split("/", 1)[0].strip()
+    if not sup_parts:
+        return ""
+    return "+".join([p for p in [base_ver or main_ver] + sup_parts if p])
+
+
 # ---------------------------------------------------------------------------
 # 第二、三步：生命週期與資料庫狀態判定
 # ---------------------------------------------------------------------------
@@ -131,8 +185,13 @@ def normalize_base_number(base: str) -> str:
 #   'has_update' 有更新（主標準已改版 / 舊版附屬文件已整合）
 #   'missing'    缺少（主標準本體 / AMD、COR、ADD 等附屬文件）
 #   'not_found'  查無結果（可能已作廢）
-# 'unknown'（無法判定）維持獨立於四大類之外的第五種狀態，需人工確認。
-JUDGE_CATEGORIES = ("no_update", "has_update", "missing", "not_found", "unknown")
+# 另有兩個獨立於四大類之外的狀態：
+#   'under_revision' 修訂中（官網已預告改版，但新版尚未正式發布）—— 與「有更新」區分：
+#                    現行出版品並未改變，故不可標為有更新，否則會出現
+#                    「當前版本與最新同步版本完全相同卻顯示有更新」的矛盾。
+#   'unknown'        無法判定，需人工確認。
+JUDGE_CATEGORIES = ("no_update", "has_update", "missing",
+                    "not_found", "under_revision", "unknown")
 
 
 def judge_update(user_title: str, user_version: str, lc: dict,
@@ -192,7 +251,16 @@ def judge_update(user_title: str, user_version: str, lc: dict,
     # （文件類型本身已可由 doc_type 判斷，不需在標籤重複說明）；細節保留在 judge_message。
     a_entries = []
     if un in now_norm:
-        pass  # 版本即為現行，A 不貢獻任何狀態
+        # 明確產生「無更新」，而非留白：這樣當 B 判定家族有缺件時，
+        # 畫面能同時呈現「這筆本身是最新」＋「缺少某某文件」兩個事實，
+        # 而不是只看到「缺少」而誤以為這筆文件本身也有問題。
+        a_entries.append({
+            "judge_status": "valid",
+            "judge_category": "no_update",
+            "missing_types": [], "missing_supplements": [],
+            "judge_label": "無更新",
+            "judge_message": f"您持有的 {user_doc} 即為官網現行版本。",
+        })
     elif un in prev_norm:
         if doc_type in ("AMD", "ADD"):
             a_entries.append({
@@ -273,34 +341,78 @@ def judge_update(user_title: str, user_version: str, lc: dict,
                         f"{', '.join(missing)}，但系統發現資料庫尚未收錄，請盡速更新資料庫。"),
                 })
     # 本身是附屬文件 → 檢查對應的主標準本體是否已收錄於資料庫。
-    # db_docs 必為非空（至少含目前判定的這筆紀錄）才檢查，避免標準未收錄於資料庫時誤判。
-    elif now_main and db_docs and norm_doc(now_main) not in db_docs:
-        b_entries.append({
-            "judge_status": "missing_main",
-            "judge_category": "missing",
-            "missing_types": [],
-            "missing_supplements": [],
-            "judge_label": "缺少（主標準本體）",
-            "judge_message": (
-                f"系統發現資料庫已收錄補充文件，但缺少對應的最新主標準本體 "
-                f"{now_main}。補充文件無法獨立使用，請盡速補充主標準。"),
-        })
+    else:
+        b_entries.extend(build_missing_main_entries(now_main, db_docs))
 
-    entries = a_entries + b_entries
-    if not entries:
-        entries.append({
-            "judge_status": "valid",
-            "judge_category": "no_update",
-            "missing_types": [], "missing_supplements": [],
-            "judge_label": "無更新",
-            "judge_message": "文件與附屬資料皆為最新且齊全，無需動作。",
-        })
+    # ---- 子判斷 C：官網已預告改版（獨立的「修訂中」狀態）----
+    c_entries = build_under_revision_entries(lc, now_main)
 
-    return _combine_judge_entries(entries, now_main)
+    # 家族完全齊全且無任何改版預告時，把「無更新」的訊息說得更完整
+    if not b_entries and not c_entries and len(a_entries) == 1 \
+            and a_entries[0]["judge_category"] == "no_update":
+        a_entries[0]["judge_message"] = "文件與附屬資料皆為最新且齊全，無需動作。"
+
+    entries = a_entries + c_entries + b_entries
+    return combine_judge_entries(entries, now_main)
 
 
-def _combine_judge_entries(entries: list, now_main: str) -> dict:
-    """將子判斷 A、B 命中的多筆結果合併為單一回傳 dict（允許同時命中多個頂層分類）。"""
+def build_missing_main_entries(now_main: str, db_docs) -> list:
+    """子判斷 B（附屬文件版）：這筆是附屬文件時，檢查對應的主標準本體是否已收錄於資料庫。
+
+    ISO 與 IEC 共用（IEC 走 edition 判定時亦須檢查，否則「只收錄 AMD、沒有主標準本體」
+    的紀錄在 IEC 類別永遠不會被提醒）。
+    db_docs 必為非空（至少含目前判定的這筆紀錄）才檢查，避免標準未收錄於資料庫時誤判。
+    """
+    if not now_main or not db_docs or norm_doc(now_main) in db_docs:
+        return []
+    return [{
+        "judge_status": "missing_main",
+        "judge_category": "missing",
+        "missing_types": [],
+        "missing_supplements": [],
+        "judge_label": "缺少（主標準本體）",
+        "judge_message": (
+            f"系統發現資料庫已收錄補充文件，但缺少對應的最新主標準本體 "
+            f"{now_main}。補充文件無法獨立使用，請盡速補充主標準。"),
+    }]
+
+
+def build_under_revision_entries(lc: dict, now_main: str) -> list:
+    """子判斷 C：官網已預告改版（獨立的「修訂中」狀態）。ISO 與 IEC 共用。
+
+    來源：ISO 為 Life cycle 的 'Revised by' / 'Will be replaced by' /
+    'New version available' 區塊（newer_title）或主標準 Stage 90.92（To be revised）；
+    IEC 為生命週期中 `in_progress` / `PREPARING` 的研擬中新版（同樣寫入 newer_title）。
+
+    這是「下一版正在開發、但尚未正式發布」的前瞻訊號，與 A、B 皆無關，可獨立成立。
+    刻意「不」歸類為 has_update：現行出版品並未改變，若標成有更新，
+    會出現「當前版本與最新同步版本一模一樣卻顯示有更新」的矛盾畫面。
+    """
+    newer_title = (lc.get("newer_title") or "").strip()
+    newer_kind = (lc.get("newer_kind") or "").strip()
+    to_be_revised = str(lc.get("now_stage") or "").strip().startswith("90.92")
+    if not newer_title and not to_be_revised:
+        return []
+    if newer_title:
+        msg = (
+            f"官網已公告後續版本（{newer_kind or '新版本'}：{newer_title}）"
+            f"{'，主標準並已進入待修訂階段（Stage 90.92）' if to_be_revised else ''}。"
+            f"新版尚未正式發布，現行版本仍然有效，請留意改版進度並預先評估影響。")
+    else:
+        msg = (
+            f"官網標示主標準 {now_main or ''} 已進入待修訂階段（Stage 90.92）。"
+            f"新版尚未正式發布，現行版本仍然有效，請留意後續改版公告。")
+    return [{
+        "judge_status": "under_revision",
+        "judge_category": "under_revision",
+        "missing_types": [], "missing_supplements": [],
+        "judge_label": "修訂中",
+        "judge_message": msg,
+    }]
+
+
+def combine_judge_entries(entries: list, now_main: str) -> dict:
+    """將子判斷 A、C、B 命中的多筆結果合併為單一回傳 dict（允許同時命中多個頂層分類）。"""
     judge_statuses = [e["judge_status"] for e in entries]
     judge_categories = []
     for e in entries:
