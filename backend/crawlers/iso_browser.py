@@ -1,22 +1,33 @@
-"""ISO 官網 Life cycle 虛擬瀏覽器存取（通過 Cloudflare）。
+"""ISO 官網 Life cycle 存取（純 HTTP 優先，虛擬瀏覽器為後備）。
 
 背景：
-    www.iso.org 受 Cloudflare 防護，純 HTTP（含一般 headless 瀏覽器、CDP 自動化）皆會被
-    擋下（回傳「Just a moment…」挑戰頁）。本模組改用 nodriver（規避 CDP 偵測）+ 本機真實
-    Chrome 通過挑戰後取得頁面 HTML，再以 StandardsCrawler 的解析方法擷取版本／狀態／新版資訊。
+    www.iso.org 受 Cloudflare 防護，一般 HTTP 用戶端會被擋下（回傳「Just a moment…」
+    挑戰頁）。本模組原先以 nodriver（規避 CDP 偵測）+ 本機真實 Chrome 通過挑戰取得 HTML。
+
+    後來確認該防護是 Managed Challenge，判定依據主要為 TLS／HTTP2 指紋：以 curl_cffi
+    模擬 Chrome 指紋即可直接取得 200；而「搜尋」這一步官網本來就是打 Algolia，虛擬瀏覽器
+    只是在替它渲染畫面，可直接呼叫同一個搜尋索引。這條純 HTTP 路徑抽離在 crawlers/iso_http.py，
+    整批 46 筆實測 24.7 秒（瀏覽器 293.4 秒）且不需要開視窗，因此列為預設路徑；nodriver 保留為後備 ——
+    Cloudflare 規則若日後收緊，仍可自動退回（或以 ISO_HTTP_DISABLE=1 強制走瀏覽器）。
+
+    兩條路徑只有「取得 HTML／搜尋結果」的方式不同，挑選（pick_target）與判定
+    （parse_lifecycle + judge_update）完全共用同一套管線。
 
 對外（同步）介面：
     resolve_source_url_sync(standard_name, current_version="")
         → 模擬「ISO 官網搜尋法規名稱 → 進入該標準頁 → 讀 Life cycle」流程，
           回傳該標準的官方來源網址與版本判讀結果。
     fetch_html_sync(url)
-        → 以虛擬瀏覽器直接取得指定網址（例如已設定好的 source_url）的 HTML。
+        → 直接取得指定網址（例如已設定好的 source_url）的 HTML。
+    fetch_available()
+        → 兩條路徑至少一條可用時為 True（呼叫端據以決定是否略過 ISO 標準）。
 
 執行緒/事件迴圈注意事項：
     nodriver 需啟動 Chrome 子程序，Windows 上必須在具備 ProactorEventLoop 的執行緒中執行，
     且不可與正在運行的事件迴圈巢狀。因此本模組所有對外函式皆為「同步」並在「呼叫端執行緒」
     建立全新事件迴圈執行；呼叫端（FastAPI 端點、爬蟲）務必透過 asyncio.to_thread() 在
     獨立工作執行緒呼叫，避免巢狀迴圈。以 threading.Lock 序列化，避免同時開啟多個瀏覽器。
+    純 HTTP 路徑沒有這些限制，但同樣經由這些同步函式呼叫，呼叫端不必分辨走的是哪條路。
 """
 import os
 import re
@@ -25,6 +36,8 @@ import asyncio
 import logging
 import threading
 from urllib.parse import urljoin, quote
+
+from crawlers import iso_http
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +55,15 @@ except Exception as e:  # pragma: no cover - 視部署環境而定
 
 # 序列化瀏覽器存取，避免同時啟動多個 Chrome 互相干擾
 _browser_lock = threading.Lock()
+
+
+def fetch_available() -> bool:
+    """ISO 官網是否有任何可用的取得路徑（純 HTTP 或虛擬瀏覽器）。
+
+    呼叫端應以此（而非 BROWSER_AVAILABLE）判斷要不要略過 ISO 標準：只裝了 curl_cffi、
+    沒有 nodriver／本機 Chrome 的環境，現在也能正常查找。
+    """
+    return iso_http.available() or BROWSER_AVAILABLE
 
 
 def _headless() -> bool:
@@ -382,10 +404,48 @@ async def _resolve_with(browser, crawler, standard_name: str, current_version: s
         return _build_not_found_result(search_url, standard_name, current_version)
     url, text = target
     _, std_html = await _open_and_wait(browser, url)
-    lc = parse_lifecycle(std_html)
-    parsed = crawler._parse_iso_page(std_html)
+    return _resolve_from_html(crawler, standard_name, current_version, url, text, std_html)
+
+
+def _resolve_from_html(crawler, standard_name: str, current_version: str,
+                       url: str, text: str, html: str) -> dict:
+    """由標準頁 HTML 走完判定管線並組裝結果。
+
+    虛擬瀏覽器與純 HTTP 兩條路徑共用本函式，確保判定邏輯只有一份
+    （見 CLAUDE.md 架構鐵則：兩種掃描模式必須走同一套判定管線）。
+    """
+    lc = parse_lifecycle(html)
+    parsed = crawler._parse_iso_page(html)
     db_docs = _collect_db_docs(crawler, standard_name)
     return _build_result(url, text, lc, parsed, standard_name, current_version, db_docs)
+
+
+def _resolve_http_one(crawler, standard_name: str, current_version: str) -> dict:
+    """純 HTTP 路徑的單筆查找：Algolia 搜尋 → 取標準頁 → 共用判定管線。
+
+    與瀏覽器路徑 _resolve_with() 使用完全相同的挑選（pick_target）與判定
+    （_resolve_from_html）邏輯，差別僅在取得資料的方式。
+
+    「官網確實查無此標準」回傳 _build_not_found_result()（正常結果，不是失敗）；
+    取得層失敗則丟出例外，由呼叫端決定是否退回虛擬瀏覽器。
+    """
+    query = crawler._extract_base_number(standard_name) or standard_name
+    results = iso_http.search(query)
+    if not results:
+        # 情境一：官網搜尋完全無回傳結果 → 查無結果，可能已作廢（需人工確認）
+        return _build_not_found_result("", standard_name, current_version)
+
+    target = pick_target(results, crawler, query)
+    if not target:
+        logger.info(
+            f"[iso_http] 搜尋 {query!r} 有結果但無精確匹配"
+            f"（候選項目: {[t for _, t in results[:4]]}），視為查無此標準（可能已作廢）。"
+        )
+        return _build_not_found_result("", standard_name, current_version)
+
+    url, text = target
+    html = iso_http.fetch_html(url)
+    return _resolve_from_html(crawler, standard_name, current_version, url, text, html)
 
 
 def _collect_db_docs(crawler, standard_name: str) -> set:
@@ -495,23 +555,68 @@ def _run_sync(coro):
 
 
 def _ensure_available():
-    if not BROWSER_AVAILABLE:
+    if not fetch_available():
         raise RuntimeError(
-            f"虛擬瀏覽器套件 nodriver 無法載入（{_IMPORT_ERROR}）。"
-            "請確認已安裝 nodriver 與本機 Chrome，詳見 requirements-local.txt 說明。"
+            "ISO 官網的兩條取得路徑皆無法使用："
+            f"curl_cffi（{iso_http.import_error()}）、nodriver（{_IMPORT_ERROR}）。"
+            "請至少安裝其中之一，詳見 requirements-local.txt 說明。"
         )
 
 
+def _new_crawler():
+    """建立供解析使用的 StandardsCrawler（純 HTTP 路徑為同步情境，需自行收尾）。"""
+    from crawlers.standards import StandardsCrawler
+    return StandardsCrawler()
+
+
+def _close_crawler(crawler) -> None:
+    """關閉 StandardsCrawler 內部的 httpx client（同步情境下的收尾）。"""
+    try:
+        asyncio.run(crawler.close())
+    except Exception:  # 收尾失敗不應影響已取得的結果
+        pass
+
+
+def _notify(on_item, *args) -> None:
+    """呼叫進度回呼；回呼自身的錯誤不得中斷整批處理。"""
+    if on_item is None:
+        return
+    try:
+        on_item(*args)
+    except Exception as cb_err:
+        logger.warning(f"on_item 回呼錯誤（{args[0] if args else ''}）: {cb_err}")
+
+
 def fetch_html_sync(url: str, need_selector=None, max_wait: int = 40) -> str:
-    """以虛擬瀏覽器取得指定網址 HTML（通過 Cloudflare）。請以 asyncio.to_thread 呼叫。"""
+    """取得指定網址 HTML（優先純 HTTP，失敗退回虛擬瀏覽器）。請以 asyncio.to_thread 呼叫。"""
     _ensure_available()
+    if iso_http.available():
+        try:
+            return iso_http.fetch_html(url)
+        except Exception as e:
+            if not BROWSER_AVAILABLE:
+                raise
+            logger.warning(f"[iso_browser] 純 HTTP 取得失敗（{e}），改用虛擬瀏覽器: {url}")
     with _browser_lock:
         return _run_sync(_fetch_html(url, need_selector, max_wait))
 
 
 def resolve_source_url_sync(standard_name: str, current_version: str = "") -> dict:
-    """搜尋 ISO 官網並解析該標準的 Life cycle，回傳官方網址與版本判讀。請以 asyncio.to_thread 呼叫。"""
+    """搜尋 ISO 官網並解析該標準的 Life cycle，回傳官方網址與版本判讀。
+
+    優先走純 HTTP 路徑，取得失敗才退回虛擬瀏覽器。請以 asyncio.to_thread 呼叫。
+    """
     _ensure_available()
+    if iso_http.available():
+        crawler = _new_crawler()
+        try:
+            return _resolve_http_one(crawler, standard_name, current_version)
+        except Exception as e:
+            if not BROWSER_AVAILABLE:
+                raise
+            logger.warning(f"[iso_browser] 純 HTTP 查找失敗（{e}），改用虛擬瀏覽器: {standard_name}")
+        finally:
+            _close_crawler(crawler)
     with _browser_lock:
         return _run_sync(_resolve(standard_name, current_version))
 
@@ -547,29 +652,95 @@ async def _fetch_many(urls: list, on_item=None) -> dict:
 
 
 def fetch_many_sync(urls: list, on_item=None) -> dict:
-    """批量取得多個網址的 HTML，共用『同一個瀏覽器視窗』依序處理，全部完成後才關閉
-    （不會逐筆開關視窗）。用於例行掃描模式：標準已設定 source_url，僅需重新讀取頁面。
+    """批量取得多個網址的 HTML。用於例行掃描模式：標準已設定 source_url，僅需重新讀取頁面。
+
+    先以純 HTTP 掃過整批（共用連線）；取得失敗者才集中交給虛擬瀏覽器重試，
+    整批共用『同一個瀏覽器視窗』，不會逐筆開關視窗。
 
     urls: 網址字串列表。
-    on_item: 選填回呼 on_item(url, html_or_None)，每處理完一筆即呼叫。
+    on_item: 選填回呼 on_item(url, html_or_None)，每處理完一筆即呼叫（每個網址只會呼叫一次）。
     回傳 {url: html_or_None}。請以 asyncio.to_thread 呼叫。
     """
     _ensure_available()
     if not urls:
         return {}
+
+    out = {}
+    pending = list(dict.fromkeys(urls))  # 保序去重
+    if iso_http.available():
+        pending = []
+        for url in dict.fromkeys(urls):
+            try:
+                html = iso_http.fetch_html(url)
+            except Exception as e:
+                logger.warning(f"[iso_browser] 純 HTTP 取得失敗（{url}）: {e}")
+                pending.append(url)
+                continue
+            out[url] = html
+            _notify(on_item, url, html)
+
+        if not pending:
+            return out
+        if not BROWSER_AVAILABLE:
+            for url in pending:
+                out[url] = None
+                _notify(on_item, url, None)
+            return out
+        logger.info(f"[iso_browser] {len(pending)} 個網址改以虛擬瀏覽器重試")
+
     with _browser_lock:
-        return _run_sync(_fetch_many(urls, on_item))
+        out.update(_run_sync(_fetch_many(pending, on_item)))
+    return out
 
 
 def resolve_many_sync(items: list, on_item=None) -> dict:
-    """批量查找：共用『同一個瀏覽器視窗』依序處理整批，全部完成後才關閉（不會逐筆開關視窗）。
+    """批量查找整批標準的 Life cycle 與版本判讀。
+
+    先以純 HTTP 掃過整批（共用連線）；取得失敗者才集中交給虛擬瀏覽器重試，
+    整批共用『同一個瀏覽器視窗』，不會逐筆開關視窗。
 
     items: [{"key": <任意鍵>, "standard_name": str, "current_version": str}, ...]
     on_item: 選填回呼 on_item(key, item, result)，每處理完一筆即呼叫（供即時進度/寫回）。
+        待重試的項目在純 HTTP 階段刻意不呼叫回呼，避免同一筆被回寫兩次。
     回傳 {key: result_dict}。請以 asyncio.to_thread 呼叫。
     """
     _ensure_available()
     if not items:
         return {}
+
+    out = {}
+    pending = list(items)
+    if iso_http.available():
+        pending = []
+        crawler = _new_crawler()
+        try:
+            for it in items:
+                try:
+                    result = _resolve_http_one(
+                        crawler, it.get("standard_name") or "", it.get("current_version") or ""
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[iso_browser] 純 HTTP 查找失敗（{it.get('standard_name')}）: {e}"
+                    )
+                    pending.append(it)
+                    continue
+                out[it["key"]] = result
+                _notify(on_item, it["key"], it, result)
+        finally:
+            _close_crawler(crawler)
+
+        if not pending:
+            return out
+        if not BROWSER_AVAILABLE:
+            for it in pending:
+                result = {"ok": False,
+                          "error": "ISO 官網純 HTTP 取得失敗，且未安裝虛擬瀏覽器(nodriver)可退回"}
+                out[it["key"]] = result
+                _notify(on_item, it["key"], it, result)
+            return out
+        logger.info(f"[iso_browser] {len(pending)} 筆改以虛擬瀏覽器重試")
+
     with _browser_lock:
-        return _run_sync(_resolve_many(items, on_item))
+        out.update(_run_sync(_resolve_many(pending, on_item)))
+    return out

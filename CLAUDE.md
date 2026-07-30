@@ -40,6 +40,7 @@ FastAPI（backend）＋ React/Vite（frontend）＋ SQLite。核心功能是「�
 | **測試不可動正式資料庫** | 複製到 scratchpad，再 `import config; config.DATABASE_PATH = Path(...)`（必須在 `import database` 之前）。 |
 | **MD 匯入會清空官方網址** | `import_standards` 以前端送來的空字串覆蓋 `source_url`。匯入後第一次掃描必須用**虛擬瀏覽器搜尋模式**取回網址，否則例行模式會因無網址而全部略過。 |
 | **MD 匯入會吃掉整份檔案的表格** | 解析器從第一個表頭之後把**所有** `\|` 分隔列都當標準資料。說明或待確認事項章節**不得出現 `\|`**，改用條列。 |
+| **libcurl 讀不了中文路徑** | 專案路徑含中文，`certifi` 裝在 `backend/.venv` 內 → curl_cffi 會回 `curl: (77) error setting certificate verify locations`。`iso_http._ca_bundle()` 已把憑證複製到系統暫存目錄繞開；日後若再引入以 libcurl 為底的套件，須留意同一個坑。 |
 
 ---
 
@@ -63,6 +64,7 @@ FastAPI（backend）＋ React/Vite（frontend）＋ SQLite。核心功能是「�
 | `backend/crawlers/standards_common.py` | 共用判定核心：`judge_update()`、文件類型、家族完整性、改版預告、結果合併 |
 | `backend/crawlers/standards.py` | 依類別分派來源、兩種掃描模式、回寫資料庫、建立警示 |
 | `backend/crawlers/{iso_browser,iec_api,en_harmonised,...}.py` | 各來源專屬：抓取與該來源的版本語意 |
+| `backend/crawlers/iso_http.py` | ISO 官網的**取得層**（Algolia 搜尋 + curl_cffi 過 Cloudflare），不含判定；`iso_browser` 優先走它，失敗才退回 nodriver。`ISO_HTTP_DISABLE=1` 可強制走瀏覽器 |
 | `frontend/src/pages/Standards.jsx` | 狀態徽章、分類統計、版本欄位顯示（957 行，顏色邏輯散在 4 處） |
 
 ---

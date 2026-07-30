@@ -202,21 +202,22 @@ class StandardsCrawler(BaseCrawler):
         注意：iso.org 與 iec.ch 來源都已改走與『虛擬瀏覽器搜尋』模式相同的判定管線
         （ISO → _resolve_iso_lifecycle()；IEC → iec_api 的 edition 判定），
         process_group 不會再對這兩個網域呼叫本函式；這裡保留 iso.org 分支僅作為
-        虛擬瀏覽器不可用時的 HTTP 直接嘗試 fallback（雖多半會被 Cloudflare 擋下，
-        但至少行為與過去一致），iec.ch 分支則保留給未預先查得結果的例外情況。
+        iso_browser 兩條取得路徑都不可用時的 HTTP 直接嘗試 fallback（雖多半會被
+        Cloudflare 擋下，但至少行為與過去一致），iec.ch 分支則保留給未預先查得結果的例外情況。
         """
         try:
             if "iso.org" in source_url:
-                # www.iso.org 受 Cloudflare 防護，純 HTTP 會 403，改用虛擬瀏覽器取得頁面。
-                # 瀏覽器須在獨立工作執行緒以全新事件迴圈執行（見 iso_browser 說明），
+                # www.iso.org 受 Cloudflare 防護，一般 HTTP 用戶端會 403；
+                # 交由 iso_browser 決定走純 HTTP（curl_cffi）或虛擬瀏覽器。
+                # 虛擬瀏覽器須在獨立工作執行緒以全新事件迴圈執行（見 iso_browser 說明），
                 # 故以 asyncio.to_thread 呼叫，避免與目前事件迴圈巢狀。
                 import asyncio as _asyncio
                 from crawlers import iso_browser
-                if iso_browser.BROWSER_AVAILABLE:
+                if iso_browser.fetch_available():
                     html = await _asyncio.to_thread(iso_browser.fetch_html_sync, source_url)
                 else:
                     logger.warning(
-                        f"[{self.name}] 未安裝虛擬瀏覽器(nodriver)，改用 HTTP 抓取 ISO 頁面"
+                        f"[{self.name}] 未安裝 curl_cffi 或 nodriver，改用一般 HTTP 抓取 ISO 頁面"
                         f"（可能被 Cloudflare 擋下）: {source_url}"
                     )
                     response = await self.get(source_url)
@@ -677,7 +678,7 @@ class StandardsCrawler(BaseCrawler):
         回傳 (checked, updated, skipped)。
 
         依類別分派來源：
-          ISO → iso_browser（官網受 Cloudflare 防護，整批共用『單一瀏覽器視窗』）
+          ISO → iso_browser（官網受 Cloudflare 防護；優先純 HTTP，失敗才退回瀏覽器）
           IEC → iec_api（webstore 搜尋 API，純 HTTP，共用單一連線）
           EN  → en_harmonised（歐盟協調標準官方公報清單，整批只下載一次）
           EU  → eu_regulation（EUR-Lex 合併版 + 執委會指引清單）
@@ -720,8 +721,8 @@ class StandardsCrawler(BaseCrawler):
         if not any((iso_items, iec_items, en_items, eu_items, mdcg_items,
                     tw_items, fda_items, astm_items, other_items)):
             return 0, 0, skipped
-        if iso_items and not iso_browser.BROWSER_AVAILABLE:
-            logger.warning(f"[{self.name}] 未安裝虛擬瀏覽器(nodriver)，ISO 無法執行搜尋，略過 {len(iso_items)} 筆")
+        if iso_items and not iso_browser.fetch_available():
+            logger.warning(f"[{self.name}] 未安裝 curl_cffi 或 nodriver，ISO 無法執行搜尋，略過 {len(iso_items)} 筆")
             for _ in iso_items:
                 standards_progress.advance(skipped=True)
             skipped += len(iso_items)
@@ -766,7 +767,8 @@ class StandardsCrawler(BaseCrawler):
             standards_progress.advance(updated=updated)
 
         # IEC 為純 HTTP，可直接在目前事件迴圈執行；
-        # ISO 需啟動 Chrome 子程序，必須在獨立工作執行緒以全新事件迴圈執行（見 iso_browser 說明）。
+        # ISO 可能需啟動 Chrome 子程序（純 HTTP 失敗時退回），必須在獨立工作執行緒以
+        # 全新事件迴圈執行（見 iso_browser 說明）。
         if iec_items:
             logger.info(f"[{self.name}] IEC webstore 搜尋 {len(iec_items)} 筆")
             await iec_api.resolve_many(iec_items, on_item)
@@ -792,7 +794,7 @@ class StandardsCrawler(BaseCrawler):
             logger.info(f"[{self.name}] 台灣法規查詢 {len(tw_items)} 筆（政府網站需放慢請求）")
             await tw_regulation.resolve_many(tw_items, on_item)
         if iso_items:
-            logger.info(f"[{self.name}] ISO 虛擬瀏覽器搜尋 {len(iso_items)} 筆")
+            logger.info(f"[{self.name}] ISO 官網搜尋 {len(iso_items)} 筆")
             await _asyncio.to_thread(iso_browser.resolve_many_sync, iso_items, on_item)
         return counters["checked"], counters["updated"], skipped
 
@@ -877,24 +879,24 @@ class StandardsCrawler(BaseCrawler):
                     domain = urlparse(source_url).netloc
                     domain_groups[domain].append(std)
 
-            # ISO 官網（iso.org）受 Cloudflare 防護，須以虛擬瀏覽器逐頁開啟。
-            # 為避免例行模式對整批 ISO 標準各自開關一次瀏覽器視窗（大量掃描時視窗會不斷
-            # 跳出干擾操作），這裡先以『單一瀏覽器視窗』一次取得整批 HTML，
-            # process_group 內解析 ISO 標準時一律使用預先擷取的結果，不再另行開啟瀏覽器。
+            # ISO 官網（iso.org）受 Cloudflare 防護，須經 iso_browser 取得頁面
+            # （優先純 HTTP，失敗才退回虛擬瀏覽器）。為避免例行模式對整批 ISO 標準各自
+            # 開關一次瀏覽器視窗（大量掃描時視窗會不斷跳出干擾操作），這裡一次取得整批 HTML，
+            # process_group 內解析 ISO 標準時一律使用預先擷取的結果，不再另行取頁。
             iso_html_by_id = {}
             iso_domains = [d for d in domain_groups if "iso.org" in d]
-            # 僅在虛擬瀏覽器可用且確實跑過批次預先擷取時，process_group 才改用預先擷取結果；
-            # 若未安裝 nodriver，維持原本逐筆 fallback（走 HTTP 嘗試）的行為，不受此次調整影響。
+            # 僅在取得路徑可用且確實跑過批次預先擷取時，process_group 才改用預先擷取結果；
+            # 若 curl_cffi 與 nodriver 都沒有，維持原本逐筆 fallback（走一般 HTTP 嘗試）的行為。
             iso_batch_ready = False
             if iso_domains:
                 from crawlers import iso_browser
-                if iso_browser.BROWSER_AVAILABLE:
+                if iso_browser.fetch_available():
                     iso_batch_ready = True
                     iso_stds = [s for d in iso_domains for s in domain_groups[d]]
                     id_by_url = defaultdict(list)
                     for s in iso_stds:
                         id_by_url[s["source_url"]].append(s["id"])
-                    logger.info(f"[{self.name}] 以單一瀏覽器視窗批次取得 {len(id_by_url)} 個 ISO 官網頁面")
+                    logger.info(f"[{self.name}] 批次取得 {len(id_by_url)} 個 ISO 官網頁面")
                     html_by_url = await asyncio.to_thread(
                         iso_browser.fetch_many_sync, list(id_by_url.keys())
                     )

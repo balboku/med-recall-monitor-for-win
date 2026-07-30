@@ -127,13 +127,14 @@ async def resolve_source_url(req: ResolveUrlRequest):
             raise HTTPException(status_code=500, detail=f"IEC 官網查找失敗：{e}")
     else:
         from crawlers import iso_browser
-        if not iso_browser.BROWSER_AVAILABLE:
+        if not iso_browser.fetch_available():
             raise HTTPException(
                 status_code=503,
-                detail="伺服器未安裝虛擬瀏覽器(nodriver)或本機 Chrome，無法執行 ISO 官網查找。",
+                detail="伺服器未安裝 curl_cffi，也沒有虛擬瀏覽器(nodriver)與本機 Chrome，"
+                       "無法執行 ISO 官網查找。",
             )
         try:
-            # 瀏覽器須在獨立工作執行緒以全新事件迴圈執行，避免與 FastAPI 事件迴圈巢狀
+            # 可能退回虛擬瀏覽器，須在獨立工作執行緒以全新事件迴圈執行，避免與 FastAPI 事件迴圈巢狀
             result = await asyncio.to_thread(
                 iso_browser.resolve_source_url_sync, name, version
             )
